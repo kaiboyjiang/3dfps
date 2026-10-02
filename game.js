@@ -18,18 +18,23 @@ const BASE_FOV = 75;
 const SWITCH_TIME = 0.45;
 const ENEMY_RADIUS = 0.45;
 const ENEMY_EYE = 1.72;
+const CEIL = 7;
+const DOOR_W = 4;
+const DOOR_H = 3.6;
 
 const COLORS = {
-  fog: 0xb4cde6,
-  uniform: 0xc0392b,
-  pants: 0x2f3d4f,
-  vest: 0x55603a,
-  helmet: 0x4a5532,
-  skin: 0xc58c66,
-  boots: 0x1f1a15,
-  gun: 0x24272a,
-  coverLow: 0xf2b134,
-  coverHigh: 0x3d8fd6,
+  fog: 0x0a1222,
+  gun: 0x2a2f36,
+};
+
+// Team 1 is the player's boarding party, team -1 the ship's defenders.
+const TEAM_STYLE = {
+  1: {
+    armor: 0xdfe6ee, suit: 0x2c3b52, plate: 0x2f7fe0, helmet: 0xeef2f6, under: 0x1d2633, boots: 0x222831, glow: 0x38c8ff, bolt: 0x4fc3ff,
+  },
+  [-1]: {
+    armor: 0x3b3236, suit: 0x1c1a1e, plate: 0xc8302a, helmet: 0x2a2326, under: 0x141214, boots: 0x191719, glow: 0xff3a2a, bolt: 0xff5a3a,
+  },
 };
 
 // ---------- Renderer / scene ----------
@@ -37,32 +42,40 @@ const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'h
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.9;
+renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(COLORS.fog, 0.0045);
+scene.fog = new THREE.FogExp2(COLORS.fog, 0.006);
 
 const camera = new THREE.PerspectiveCamera(BASE_FOV, window.innerWidth / window.innerHeight, 0.05, 400);
 camera.rotation.order = 'YXZ';
 scene.add(camera);
 
-// Sky dome, also used as the image-based lighting environment.
-const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(45), THREE.MathUtils.degToRad(140));
+// Space backdrop seen through the hull windows.
+const NOISE_GLSL = `
+  float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+  float noise(vec3 x) {
+    vec3 i = floor(x), f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+  }
+  float fbm(vec3 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 5; i++) { v += a * noise(p); p = p * 2.02 + 7.1; a *= 0.5; }
+    return v;
+  }`;
+const starDir = new THREE.Vector3(0.6, 0.18, -0.78).normalize();
 const sky = new THREE.Mesh(
-  new THREE.SphereGeometry(300, 32, 16),
+  new THREE.SphereGeometry(300, 48, 24),
   new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     fog: false,
-    uniforms: {
-      zenith: { value: new THREE.Color(0x1f6fe0) },
-      horizon: { value: new THREE.Color(0xa6d2ff) },
-      ground: { value: new THREE.Color(0x5d6b45) },
-      sunDir: { value: sunDir },
-    },
+    uniforms: { starDir: { value: starDir } },
     vertexShader: `
       varying vec3 vDir;
       void main() {
@@ -71,52 +84,110 @@ const sky = new THREE.Mesh(
         gl_Position = p.xyww;
       }`,
     fragmentShader: `
-      uniform vec3 zenith, horizon, ground, sunDir;
+      uniform vec3 starDir;
       varying vec3 vDir;
-      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float noise(vec2 p) {
-        vec2 i = floor(p), f = fract(p);
-        f = f * f * (3.0 - 2.0 * f);
-        return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
-      }
-      float fbm(vec2 p) {
-        float v = 0.0, a = 0.5;
-        for (int i = 0; i < 6; i++) { v += a * noise(p); p = p * 2.03 + 17.0; a *= 0.5; }
-        return v;
-      }
+      ${NOISE_GLSL}
       void main() {
         vec3 d = normalize(vDir);
-        vec3 col = d.y > 0.0 ? mix(horizon, zenith, pow(d.y, 0.45)) : mix(horizon, ground, pow(-d.y, 0.3));
-        float s = max(dot(d, sunDir), 0.0);
-        if (d.y > 0.0) {
-          vec2 cp = d.xz / (d.y + 0.12) * 1.3;
-          float c = smoothstep(0.48, 0.78, fbm(cp)) * smoothstep(0.0, 0.2, d.y);
-          vec3 cloud = mix(vec3(0.5, 0.55, 0.62), vec3(0.66, 0.66, 0.68), smoothstep(0.5, 0.9, fbm(cp + 0.6)));
-          col = mix(col, cloud + vec3(0.12, 0.1, 0.06) * pow(s, 6.0), c * 0.9);
-        }
-        col += vec3(1.0, 0.9, 0.7) * (pow(s, 1200.0) * 40.0 + pow(s, 24.0) * 0.6);
-        gl_FragColor = vec4(col * 1.4, 1.0);
+        vec3 col = vec3(0.004, 0.006, 0.016);
+        float n = fbm(d * 2.2);
+        float m = fbm(d * 4.5 + 11.0);
+        col += vec3(0.32, 0.08, 0.42) * pow(smoothstep(0.42, 0.85, n), 1.5) * 0.55;
+        col += vec3(0.04, 0.22, 0.42) * pow(smoothstep(0.45, 0.9, m), 1.5) * 0.5;
+        vec3 c = floor(d * 220.0);
+        vec3 f = fract(d * 220.0) - 0.5;
+        float star = step(0.975, hash(c)) * smoothstep(0.32, 0.0, length(f)) * (0.6 + 3.0 * hash(c + 3.7));
+        col += star * mix(vec3(1.0, 0.82, 0.65), vec3(0.7, 0.85, 1.0), hash(c + 9.1));
+        float s = max(dot(d, starDir), 0.0);
+        col += vec3(1.0, 0.92, 0.8) * (pow(s, 3000.0) * 80.0 + pow(s, 60.0) * 0.6 + pow(s, 8.0) * 0.05);
+        gl_FragColor = vec4(col, 1.0);
       }`,
   }),
 );
 sky.frustumCulled = false;
+scene.add(sky);
+
+const planet = new THREE.Mesh(
+  new THREE.SphereGeometry(70, 64, 32),
+  new THREE.ShaderMaterial({
+    fog: false,
+    uniforms: { lightDir: { value: new THREE.Vector3(0.8, 0.3, 0.5).normalize() } },
+    vertexShader: `
+      varying vec3 vN, vP, vW;
+      void main() {
+        vP = position;
+        vN = normalize(mat3(modelMatrix) * normal);
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vW = w.xyz;
+        gl_Position = projectionMatrix * viewMatrix * w;
+      }`,
+    fragmentShader: `
+      uniform vec3 lightDir;
+      varying vec3 vN, vP, vW;
+      ${NOISE_GLSL}
+      void main() {
+        vec3 p = normalize(vP);
+        float n = fbm(p * 3.0);
+        float bands = sin(p.y * 22.0 + n * 7.0) * 0.5 + 0.5;
+        vec3 col = mix(vec3(0.62, 0.32, 0.18), vec3(0.95, 0.78, 0.56), bands);
+        col = mix(col, vec3(0.35, 0.14, 0.1), smoothstep(0.55, 0.75, fbm(p * 7.0 + 3.0)) * 0.5);
+        vec3 N = normalize(vN);
+        float l = max(dot(N, lightDir), 0.0);
+        float rim = pow(1.0 - max(dot(N, normalize(cameraPosition - vW)), 0.0), 3.0);
+        col = col * (0.02 + l * 1.4) + vec3(0.35, 0.55, 1.0) * rim * (0.08 + l);
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  }),
+);
+planet.position.set(-50, -20, -240);
+scene.add(planet);
+
+// Lighting environment: a generic lit ship interior with ceiling light strips.
 const pmrem = new THREE.PMREMGenerator(renderer);
 const envScene = new THREE.Scene();
-envScene.add(sky);
-const envMap = pmrem.fromScene(envScene, 0.02).texture;
-scene.add(sky);
+envScene.add(new THREE.Mesh(
+  new THREE.SphereGeometry(10, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        vec3 col = mix(vec3(0.05, 0.06, 0.08), vec3(0.42, 0.47, 0.55), smoothstep(-0.5, 0.7, d.y));
+        float strips = smoothstep(0.9, 0.98, abs(sin(atan(d.z, d.x) * 5.0))) * smoothstep(0.55, 0.85, d.y);
+        col += vec3(2.4, 2.6, 2.9) * strips;
+        col += vec3(0.1, 0.5, 0.8) * smoothstep(0.2, 0.0, abs(d.y + 0.05)) * 0.4;
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  }),
+));
+const envMap = pmrem.fromScene(envScene, 0.03).texture;
 scene.environment = envMap;
-scene.environmentIntensity = 0.55;
+scene.environmentIntensity = 0.8;
 
-scene.add(new THREE.HemisphereLight(0xbfdcff, 0x7a6248, 0.5));
-const sun = new THREE.DirectionalLight(0xfff0d8, 3.2);
-sun.position.copy(sunDir).multiplyScalar(50);
+scene.add(new THREE.HemisphereLight(0xb8ccff, 0x3a404c, 0.7));
+const sun = new THREE.DirectionalLight(0xe8f0ff, 2.2);
+sun.position.set(14, 45, 10);
 sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
 sun.shadow.bias = -0.0003;
 sun.shadow.normalBias = 0.03;
 Object.assign(sun.shadow.camera, { left: -38, right: 38, top: 38, bottom: -38, near: 1, far: 120 });
 scene.add(sun);
+for (const [x, y, z, color, intensity] of [
+  [0, 3.5, 3, 0x38d8ff, 60], [0, 5.5, -20, 0x7fb0ff, 30], [0, 5.5, 24, 0xffe0b0, 30],
+  [19.5, 5, 3, 0xffa040, 30], [-19.5, 5, 3, 0xdce8ff, 25],
+]) {
+  const light = new THREE.PointLight(color, intensity, 20, 1.6);
+  light.position.set(x, y, z);
+  scene.add(light);
+}
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -157,16 +228,54 @@ function pbrMaterial(name, opts = {}) {
   });
 }
 
+const panelTex = canvasTexture(512, (g, s) => {
+  g.fillStyle = '#c9d0d8';
+  g.fillRect(0, 0, s, s);
+  const h = s / 2;
+  for (let py = 0; py < 2; py++) {
+    for (let px = 0; px < 2; px++) {
+      const x0 = px * h;
+      const y0 = py * h;
+      g.fillStyle = `rgb(${(190 + Math.random() * 20) | 0},${(198 + Math.random() * 20) | 0},${(208 + Math.random() * 20) | 0})`;
+      g.fillRect(x0 + 6, y0 + 6, h - 12, h - 12);
+      g.fillStyle = 'rgba(40,50,60,0.16)';
+      g.fillRect(x0 + 30, y0 + 40, h - 60, h - 80);
+      g.strokeStyle = 'rgba(255,255,255,0.35)';
+      g.lineWidth = 2;
+      g.strokeRect(x0 + 30, y0 + 40, h - 60, h - 80);
+      g.fillStyle = '#5a6470';
+      for (const [bx, by] of [[14, 14], [h - 14, 14], [14, h - 14], [h - 14, h - 14]]) {
+        g.beginPath();
+        g.arc(x0 + bx, y0 + by, 3.5, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+  }
+  g.fillStyle = '#3a424c';
+  g.fillRect(0, 0, s, 4);
+  g.fillRect(0, h - 2, s, 4);
+  g.fillRect(0, 0, 4, s);
+  g.fillRect(h - 2, 0, 4, s);
+  for (let i = 0; i < 400; i++) {
+    g.fillStyle = `rgba(30,35,40,${Math.random() * 0.08})`;
+    g.fillRect(Math.random() * s, Math.random() * s, 2 + Math.random() * 12, 2 + Math.random() * 12);
+  }
+});
+
 const MATS = {
-  floor: pbrMaterial('concrete_floor_worn_001'),
-  brick: pbrMaterial('red_brick_03'),
-  pillar: pbrMaterial('concrete_wall_008'),
-  coverLow: pbrMaterial('concrete_wall_008', { color: COLORS.coverLow }),
-  coverHigh: pbrMaterial('concrete_wall_008', { color: COLORS.coverHigh }),
-  crate: pbrMaterial('wood_planks_dirt', { color: 0xe0b98a }),
-  crateFrame: pbrMaterial('wood_planks_dirt', { color: 0x9a6a42 }),
+  floor: pbrMaterial('metal_plate', { color: 0xa4adb8 }),
+  hull: new THREE.MeshStandardMaterial({
+    map: panelTex,
+    normalMap: loadTex('assets/textures/metal_plate_nor.jpg', false),
+    normalScale: new THREE.Vector2(0.3, 0.3),
+    roughness: 0.45,
+    metalness: 0.35,
+  }),
+  ceiling: pbrMaterial('metal_plate', { color: 0x6c7480 }),
   metal: pbrMaterial('metal_plate'),
   rust: pbrMaterial('rusty_metal_02'),
+  corrugated: pbrMaterial('corrugated_iron', { color: 0xb8c2cc, metalnessMap: null, metalness: 0.5 }),
+  crates: [0xc8d0da, 0xff8a3c, 0x3cc8d8].map((color) => pbrMaterial('metal_plate', { color, metalnessMap: null, metalness: 0.25 })),
 };
 
 // Box with UVs scaled to world size so textures keep a constant texel density on every face.
@@ -186,48 +295,21 @@ const solids = [];      // { min: Vector3, max: Vector3 }
 const worldMeshes = []; // meshes that block bullets
 
 const floorGeo = new THREE.PlaneGeometry(ARENA * 2 + 2, ARENA * 2 + 2);
-floorGeo.attributes.uv.array.forEach((v, i, a) => { a[i] = v * (ARENA * 2 + 2) / 3; });
+floorGeo.attributes.uv.array.forEach((v, i, a) => { a[i] = v * (ARENA * 2 + 2) / 2; });
 const floor = new THREE.Mesh(floorGeo, MATS.floor);
 floor.rotation.x = -Math.PI / 2;
 floor.receiveShadow = true;
 scene.add(floor);
 worldMeshes.push(floor);
 
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(600, 600),
-  new THREE.MeshStandardMaterial({ color: 0x6f8f4a, roughness: 1 }),
-);
-ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.02;
-ground.receiveShadow = true;
-scene.add(ground);
-
-const TILE = { brick: 2.5, pillar: 3, coverLow: 2, coverHigh: 2 };
-
-function addSolid(mesh, x, z, w, h, d, y) {
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  scene.add(mesh);
-  worldMeshes.push(mesh);
-  solids.push({
-    min: new THREE.Vector3(x - w / 2, y, z - d / 2),
-    max: new THREE.Vector3(x + w / 2, y + h, z + d / 2),
-  });
-}
-
-function addBox(x, z, w, h, d, kind, y = 0) {
-  if (kind === 'crate') return addCrate(x, z, w, y);
-  const mesh = new THREE.Mesh(worldBox(w, h, d, TILE[kind]), MATS[kind]);
-  mesh.position.set(x, y + h / 2, z);
-  addSolid(mesh, x, z, w, h, d, y);
-}
-
-function addCrate(x, z, s, y) {
-  const mesh = new THREE.Mesh(worldBox(s * 0.96, s * 0.96, s * 0.96, s), MATS.crate);
-  mesh.position.set(x, y + s / 2, z);
-  addSolid(mesh, x, z, s, s, s, y);
-  addCrateDetails(x, z, s, y);
-}
+const ceilGeo = new THREE.PlaneGeometry(ARENA * 2 + 2, ARENA * 2 + 2);
+ceilGeo.attributes.uv.array.forEach((v, i, a) => { a[i] = v * (ARENA * 2 + 2) / 3; });
+const ceiling = new THREE.Mesh(ceilGeo, MATS.ceiling);
+ceiling.rotation.x = Math.PI / 2;
+ceiling.position.y = CEIL;
+ceiling.receiveShadow = true;
+scene.add(ceiling);
+worldMeshes.push(ceiling);
 
 // ---------- Static detail, batched into one mesh per material ----------
 const decorBatches = new Map();
@@ -243,7 +325,7 @@ function decoMatrix(material, geo, matrix) {
 }
 
 function deco(material, geo, x, y, z, rot = [0, 0, 0], scale = [1, 1, 1]) {
-  decorEuler.set(rot[0], rot[1], rot[2]);
+  decorEuler.set(rot[0], rot[1], rot[2], rot[3] || 'XYZ');
   decorMatrix.compose(decorPos.set(x, y, z), decorQuat.setFromEuler(decorEuler), decorScale.set(scale[0], scale[1], scale[2]));
   decoMatrix(material, geo, decorMatrix);
 }
@@ -334,23 +416,6 @@ const wornTex = canvasTexture(256, (g, s) => {
   }
 }, false);
 
-const blobTex = canvasTexture(256, (g, s) => {
-  g.fillStyle = '#000';
-  g.fillRect(0, 0, s, s);
-  for (let i = 0; i < 9; i++) {
-    const x = s / 2 + (Math.random() - 0.5) * s * 0.35;
-    const y = s / 2 + (Math.random() - 0.5) * s * 0.35;
-    const r = s * (0.12 + Math.random() * 0.16);
-    const grad = g.createRadialGradient(x, y, 0, x, y, r);
-    grad.addColorStop(0, 'rgba(255,255,255,1)');
-    grad.addColorStop(0.7, 'rgba(255,255,255,0.9)');
-    grad.addColorStop(1, 'rgba(255,255,255,0)');
-    g.fillStyle = grad;
-    g.fillRect(0, 0, s, s);
-  }
-}, false);
-blobTex.wrapS = blobTex.wrapT = THREE.ClampToEdgeWrapping;
-
 const hazardTex = canvasTexture(128, (g, s) => {
   g.fillStyle = '#ffc61a';
   g.fillRect(0, 0, s, s);
@@ -365,20 +430,6 @@ const hazardTex = canvasTexture(128, (g, s) => {
   }
 });
 
-const burlapTex = canvasTexture(128, (g, s) => {
-  g.fillStyle = '#c9b48a';
-  g.fillRect(0, 0, s, s);
-  for (let i = 0; i < s; i += 3) {
-    g.fillStyle = `rgba(80,60,30,${0.15 + Math.random() * 0.2})`;
-    g.fillRect(0, i, s, 1);
-    g.fillRect(i, 0, 1, s);
-  }
-  for (let i = 0; i < 300; i++) {
-    g.fillStyle = `rgba(60,45,25,${Math.random() * 0.25})`;
-    g.fillRect(Math.random() * s, Math.random() * s, 2 + Math.random() * 6, 2 + Math.random() * 6);
-  }
-});
-
 const grateTex = canvasTexture(128, (g, s) => {
   g.fillStyle = '#5b5f63';
   g.fillRect(0, 0, s, s);
@@ -387,22 +438,6 @@ const grateTex = canvasTexture(128, (g, s) => {
   g.strokeStyle = '#3a3d40';
   g.lineWidth = 6;
   g.strokeRect(3, 3, s - 6, s - 6);
-});
-
-const windowsTex = canvasTexture(256, (g, s) => {
-  g.fillStyle = '#ffffff';
-  g.fillRect(0, 0, s, s);
-  const n = 4;
-  const cell = s / n;
-  for (let y = 0; y < n; y++) {
-    for (let x = 0; x < n; x++) {
-      const lit = Math.random() < 0.15;
-      g.fillStyle = lit ? '#ffe9a8' : `rgb(${40 + Math.random() * 30},${60 + Math.random() * 30},${85 + Math.random() * 40})`;
-      g.fillRect(x * cell + cell * 0.18, y * cell + cell * 0.2, cell * 0.64, cell * 0.55);
-      g.fillStyle = 'rgba(0,0,0,0.25)';
-      g.fillRect(x * cell + cell * 0.18, y * cell + cell * 0.75, cell * 0.64, cell * 0.06);
-    }
-  }
 });
 
 function stdMat(color, roughness, metalness = 0, extra = {}) {
@@ -419,67 +454,120 @@ function scenery(material) {
   return material;
 }
 
+const glowMat = (color, intensity = 3) => noShadow(new THREE.MeshStandardMaterial({ color: 0x000000, emissive: color, emissiveIntensity: intensity }));
+
+const screenMats = ['#38e1ff', '#ffb43a', '#3dff9a'].map((c) => noShadow(new THREE.MeshStandardMaterial({
+  color: 0x000000,
+  emissive: 0xffffff,
+  emissiveIntensity: 1.4,
+  roughness: 0.15,
+  metalness: 0.5,
+  emissiveMap: canvasTexture(256, (g, s) => {
+    g.fillStyle = '#04080c';
+    g.fillRect(0, 0, s, s);
+    g.strokeStyle = c;
+    g.fillStyle = c;
+    g.lineWidth = 2;
+    g.strokeRect(8, 8, s - 16, s - 16);
+    for (let i = 0; i < 6; i++) {
+      g.globalAlpha = 0.5 + Math.random() * 0.5;
+      g.fillRect(20, 30 + i * 18, 20 + Math.random() * 90, 8);
+    }
+    g.globalAlpha = 1;
+    g.beginPath();
+    for (let x = 0; x < 100; x++) {
+      const y = 205 - 30 * Math.sin(x * 0.15) - Math.random() * 12;
+      if (x) g.lineTo(140 + x, y);
+      else g.moveTo(140, y);
+    }
+    g.stroke();
+    for (const r of [40, 22]) {
+      g.beginPath();
+      g.arc(190, 80, r, 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.beginPath();
+    g.moveTo(190, 80);
+    g.lineTo(222, 56);
+    g.stroke();
+    g.globalAlpha = 0.6;
+    for (let i = 0; i < 5; i++) g.fillRect(20, 160 + i * 14, 40 + Math.random() * 60, 3);
+  }),
+})));
+
+function signMat(text, color) {
+  const tex = textTexture([text], { font: 'bold 130px "Segoe UI", Arial, sans-serif', w: 1024, h: 256 });
+  return noShadow(new THREE.MeshStandardMaterial({
+    color: 0x000000, map: tex, emissive: color, emissiveMap: tex, emissiveIntensity: 2, alphaTest: 0.4, roughness: 0.4,
+  }));
+}
+
 const DMAT = {
+  hull: MATS.hull,
   metal: MATS.metal,
   rust: MATS.rust,
-  concrete: MATS.pillar,
-  brick: MATS.brick,
-  wood: MATS.crateFrame,
+  corrugated: MATS.corrugated,
+  dark: stdMat(0x262b33, 0.45, 0.7),
+  trim: stdMat(0x7a8390, 0.3, 0.9),
+  white: stdMat(0xe4e9ef, 0.35, 0.2),
   hazard: stdMat(0xffffff, 0.6, 0, { map: hazardTex }),
-  pipeYellow: stdMat(0xffc21a, 0.45, 0.3),
-  pipeRed: stdMat(0xd62828, 0.45, 0.3),
-  black: stdMat(0x18191b, 0.6, 0.2),
-  rubber: stdMat(0x161616, 0.92),
-  cone: stdMat(0xff5a00, 0.5),
-  reflective: stdMat(0xf4f4f4, 0.3, 0.2),
-  sandbag: stdMat(0xffffff, 1, 0, { map: burlapTex }),
-  drumRed: stdMat(0xe0382a, 0.45, 0.3, { normalMap: MATS.metal.normalMap }),
-  drumBlue: stdMat(0x2c6fe0, 0.45, 0.3, { normalMap: MATS.metal.normalMap }),
-  containerGreen: pbrMaterial('corrugated_iron', { color: 0x5fe0a0, metalnessMap: null, metalness: 0.35 }),
-  containerOrange: pbrMaterial('corrugated_iron', { color: 0xf0642a, metalnessMap: null, metalness: 0.35 }),
-  glow: noShadow(new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff0c4, emissiveIntensity: 5 })),
-  glass: stdMat(0x9fc7e8, 0.05, 0.1, { transparent: true, opacity: 0.6 }),
+  pipe: stdMat(0x9aa3ae, 0.3, 0.9),
+  pipeRed: stdMat(0xc8323a, 0.4, 0.4),
+  pipeBlue: stdMat(0x2f6fd0, 0.4, 0.4),
+  ceilTrim: noShadow(stdMat(0x5a626d, 0.4, 0.8)),
+  ceilDark: noShadow(stdMat(0x1c2026, 0.5, 0.6)),
+  ceilPipe: noShadow(stdMat(0x8d96a1, 0.3, 0.9)),
+  cockpit: stdMat(0x0d1a2a, 0.08, 0.9),
+  light: glowMat(0xe6f4ff, 4),
+  cyan: glowMat(0x38e1ff, 4),
+  red: glowMat(0xff3040, 3),
+  amber: glowMat(0xffa630, 3),
+  green: glowMat(0x3dff9a, 3),
+  core: glowMat(0x5fe8ff, 7),
+  glass: noShadow(stdMat(0x8fd0ff, 0.05, 0.9, { transparent: true, opacity: 0.16, depthWrite: false })),
+  shield: scenery(new THREE.MeshBasicMaterial({
+    color: 0x3aa8ff, transparent: true, opacity: 0.14, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  })),
   paintYellow: decalMaterial(null, { color: 0xffc81e, alphaMap: wornTex, roughness: 0.75 }),
   paintWhite: decalMaterial(null, { color: 0xf2f2f2, alphaMap: wornTex, roughness: 0.75 }),
   seam: noShadow(stdMat(0x2b2c2d, 0.95, 0, { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 })),
   grate: noShadow(stdMat(0xffffff, 0.45, 0.8, { map: grateTex, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })),
-  puddle: noShadow(stdMat(0x15181b, 0.02, 0, {
-    alphaMap: blobTex, transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
-  })),
-  oil: noShadow(stdMat(0x080808, 0.2, 0, {
-    alphaMap: blobTex, transparent: true, opacity: 0.75, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
-  })),
-  extinguisher: stdMat(0xd81e1e, 0.35, 0.2),
-  foliage: scenery(stdMat(0x2f9a3e, 0.9)),
-  foliageDark: scenery(stdMat(0x1f6e34, 0.9)),
-  trunk: scenery(stdMat(0x5b3b22, 0.95)),
-  buildings: [0xe8a87c, 0xf3e3c3, 0x7fc8c2, 0xa9b8d6, 0xd9786a].map((c) => scenery(stdMat(c, 0.85, 0, { map: windowsTex }))),
-  roof: scenery(stdMat(0x55585c, 0.9)),
 };
-const STENCILS = [
-  decalMaterial(textTexture(['FRAGILE'], { fg: '#d91e1e' })),
-  decalMaterial(textTexture(['7.62 AMMO', 'x 1000'], { fg: '#141414', font: 'bold 70px Impact, Arial Black, sans-serif' })),
-  decalMaterial(textTexture(['\u25B2 \u25B2', 'THIS SIDE UP'], { fg: '#141414', font: 'bold 64px Impact, Arial Black, sans-serif' })),
-  decalMaterial(textTexture(['MED SUPPLY'], { fg: '#1a5fd6', font: 'bold 78px Impact, Arial Black, sans-serif' })),
+const CRATE_LABELS = [
+  decalMaterial(textTexture(['ZERO-G', 'FRAGILE'], { fg: '#141414', font: 'bold 80px Impact, Arial Black, sans-serif' })),
+  decalMaterial(textTexture(['PLASMA', 'CELLS'], { fg: '#141414', font: 'bold 80px Impact, Arial Black, sans-serif' })),
+  decalMaterial(textTexture(['CARGO 07-B'], { fg: '#141414', font: 'bold 84px Impact, Arial Black, sans-serif' })),
 ];
+const SIGNS = {
+  hangar: signMat('HANGAR', 0xffd27a),
+  cargo: signMat('CARGO BAY  A', 0x8fd8ff),
+  reactor: signMat('REACTOR  B', 0x8fd8ff),
+  bridge: signMat('BRIDGE  C', 0xff8a7a),
+  engineering: signMat('ENGINEERING', 0xffb45a),
+};
 
 const G = {
   box: new THREE.BoxGeometry(1, 1, 1),
-  cyl: new THREE.CylinderGeometry(1, 1, 1, 20),
+  cyl: new THREE.CylinderGeometry(1, 1, 1, 24),
   cylLow: new THREE.CylinderGeometry(1, 1, 1, 10),
   plane: new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
   wallPlane: new THREE.PlaneGeometry(1, 1),
-  rib: new THREE.TorusGeometry(1, 0.05, 6, 24).rotateX(Math.PI / 2),
-  tire: new THREE.TorusGeometry(0.31, 0.12, 10, 22).rotateX(Math.PI / 2),
-  cone: new THREE.CylinderGeometry(0.03, 0.16, 0.62, 18),
-  bag: new THREE.SphereGeometry(1, 12, 8),
-  sphere: new THREE.SphereGeometry(1, 10, 8),
-  pine: new THREE.ConeGeometry(1, 1, 10),
+  rib: new THREE.TorusGeometry(1, 0.05, 6, 32).rotateX(Math.PI / 2),
 };
 
 // Box helper: centre (x, y, z), size (w, h, d) and optional yaw, with world-scaled UVs.
 function box(material, x, y, z, w, h, d, ry = 0, tile = 1) {
   deco(material, worldBox(w, h, d, tile), x, y, z, [0, ry, 0]);
+}
+
+// Decorated box that also blocks movement.
+function block(material, x, z, w, h, d, y = 0, tile = 2) {
+  box(material, x, y + h / 2, z, w, h, d, 0, tile);
+  solidOnly(x, z, w, h, d, y);
+}
+
+function sign(material, x, y, z, ry, w = 2.8, h = 0.7) {
+  deco(material, G.wallPlane, x, y, z, [0, ry, 0], [w, h, 1]);
 }
 
 // Wall frames: t runs along the wall, d is distance inward from its inner face; local +Z faces the arena.
@@ -503,322 +591,389 @@ function wallPart(wall, material, geo, t, d, y, rot = [0, 0, 0], scale = [1, 1, 
   decoMatrix(material, geo, world);
 }
 
-function addWallDetails() {
+// ----- Outer hull with window openings [t0, t1] -----
+function hullWall(wall, openings, { low = 1.5, high = 5.2, pane = DMAT.glass } = {}) {
+  const L = ARENA * 2 + 2;
+  if (low > 0) wallBox(wall, DMAT.hull, 0, -0.5, low / 2, L, low, 1, 4);
+  wallBox(wall, DMAT.hull, 0, -0.5, (high + CEIL) / 2, L, CEIL - high, 1, 4);
+  let t = -L / 2;
+  for (const [a, b] of [...openings, [L / 2, L / 2]]) {
+    if (a > t) wallBox(wall, DMAT.hull, (t + a) / 2, -0.5, (low + high) / 2, a - t, high - low, 1, 4);
+    t = b;
+  }
+  const h = high - low;
+  const cy = (low + high) / 2;
+  for (const [a, b] of openings) {
+    const c = (a + b) / 2;
+    const w = b - a;
+    wallPart(wall, pane, G.wallPlane, c, -0.45, cy, [0, 0, 0], [w, h, 1]);
+    if (low > 0) {
+      wallBox(wall, DMAT.trim, c, 0.06, low - 0.06, w + 0.4, 0.14, 0.3);
+      wallBox(wall, DMAT.cyan, c, 0.22, low + 0.02, w, 0.03, 0.03);
+    }
+    wallBox(wall, DMAT.trim, c, 0.06, high + 0.06, w + 0.4, 0.14, 0.3);
+    for (const s of [a - 0.1, b + 0.1]) wallBox(wall, DMAT.trim, s, 0.06, cy, 0.22, h + 0.2, 0.3);
+    const n = Math.max(1, Math.round(w / 3.5));
+    for (let i = 1; i < n; i++) wallBox(wall, DMAT.dark, a + (w * i) / n, -0.3, cy, 0.14, h, 0.14);
+  }
+}
+
+// Ribs, conduits and wall furniture, kept clear of the [t0, t1] ranges in `avoid`.
+function hullDetails(wall, avoid) {
   const L = ARENA * 2;
-  WALLS.forEach((wall, wi) => {
-    wallBox(wall, DMAT.concrete, 0, -0.5, WALL_H + 0.15, L + 2.4, 0.3, 1.4, 3);
-    wallBox(wall, DMAT.concrete, 0, 0.06, 0.2, L, 0.4, 0.12, 3);
-    for (let t = -26.25; t <= 26.25; t += 7.5) {
-      wallBox(wall, DMAT.brick, t, 0.125, WALL_H / 2, 0.7, WALL_H, 0.25, 2.5);
-      wallBox(wall, DMAT.concrete, t, 0.15, WALL_H - 0.1, 0.8, 0.2, 0.3, 3);
-      if (Math.round((t + 26.25) / 7.5) % 2 === 0) {
-        wallBox(wall, DMAT.black, t, 0.45, 3.85, 0.34, 0.12, 0.42);
-        wallBox(wall, DMAT.black, t, 0.3, 3.95, 0.08, 0.2, 0.08);
-        wallBox(wall, DMAT.glow, t, 0.5, 3.78, 0.26, 0.02, 0.3);
-      }
-    }
-    if (wi < 2) {
-      wallPart(wall, DMAT.metal, G.cylLow, 0, 0.4, 4.35, [0, 0, Math.PI / 2], [0.1, L, 0.1]);
-      wallPart(wall, wi === 0 ? DMAT.pipeYellow : DMAT.pipeRed, G.cylLow, 0, 0.62, 4.35, [0, 0, Math.PI / 2], [0.06, L, 0.06]);
-      for (let t = -28; t <= 28; t += 3.5) {
-        wallBox(wall, DMAT.black, t, 0.35, 4.35, 0.06, 0.26, 0.7);
-      }
+  const clear = (t, m) => !avoid.some(([a, b]) => t > a - m && t < b + m);
+  wallBox(wall, DMAT.dark, 0, 0.06, 0.15, L, 0.3, 0.12, 2);
+  wallBox(wall, DMAT.trim, 0, 0.12, CEIL - 0.35, L, 0.3, 0.24, 2);
+  wallBox(wall, DMAT.cyan, 0, 0.245, CEIL - 0.35, L, 0.03, 0.01);
+  wallPart(wall, DMAT.pipe, G.cylLow, 0, 0.35, CEIL - 0.85, [0, 0, Math.PI / 2], [0.09, L, 0.09]);
+  wallPart(wall, DMAT.pipeBlue, G.cylLow, 0, 0.3, CEIL - 1.15, [0, 0, Math.PI / 2], [0.06, L, 0.06]);
+  for (let t = -ARENA + 3; t < ARENA - 1; t += 6) {
+    if (!clear(t, 0.5)) continue;
+    wallBox(wall, DMAT.trim, t, 0.15, CEIL / 2, 0.5, CEIL, 0.3, 2);
+    wallBox(wall, DMAT.dark, t, 0.31, CEIL / 2 - 0.3, 0.22, CEIL - 1.6, 0.04);
+    wallBox(wall, DMAT.light, t, 0.335, 2.6, 0.06, 1.4, 0.02);
+    for (const y of [0.5, CEIL - 1.6]) wallBox(wall, DMAT.dark, t, 0.33, y, 0.36, 0.12, 0.05);
+  }
+  for (let t = -ARENA + 6; t < ARENA - 2; t += 6) {
+    if (!clear(t, 1.6)) continue;
+    const r = rand();
+    if (r < 0.35) {
+      wallBox(wall, DMAT.dark, t, 0.04, 0.9, 1.2, 0.7, 0.08);
+      for (let i = 0; i < 5; i++) wallBox(wall, DMAT.trim, t, 0.09, 0.66 + i * 0.12, 1.1, 0.03, 0.04);
+    } else if (r < 0.65) {
+      wallBox(wall, DMAT.dark, t, 0.05, 2.2, 1.5, 0.95, 0.1);
+      wallPart(wall, screenMats[Math.floor(rand() * 3)], G.wallPlane, t, 0.105, 2.2, [0, 0, 0], [1.36, 0.82, 1]);
     } else {
-      for (const t of [-10, 10]) {
-        wallBox(wall, DMAT.metal, t, 0.12, 1.6, 0.6, 0.8, 0.22, 1);
-        wallBox(wall, DMAT.black, t + 0.2, 0.24, 1.75, 0.06, 0.12, 0.04);
-        wallBox(wall, DMAT.hazard, t, 0.235, 1.35, 0.3, 0.12, 0.01, 0.25);
-        wallPart(wall, DMAT.metal, G.cylLow, t, 0.08, 3.4, [0, 0, 0], [0.025, 2.8, 0.025]);
-      }
-      for (const t of [-18.75, 18.75]) {
-        wallBox(wall, DMAT.metal, t, 0.04, 3, 1.4, 0.9, 0.08, 1);
-        for (let k = 0; k < 6; k++) wallBox(wall, DMAT.black, t, 0.09, 2.65 + k * 0.14, 1.25, 0.03, 0.06);
-      }
-    }
-  });
-  const signs = [
-    [0, textTexture(['SECTOR 7'], { fg: '#ffffff', font: 'bold 100px Impact, Arial Black, sans-serif' }), 5.6, 2.8],
-    [1, textTexture(['ZONE B'], { fg: '#ffd21a', font: 'bold 130px Impact, Arial Black, sans-serif' }), 5, 2.5],
-    [2, textTexture(['DANGER', 'KEEP CLEAR'], { fg: '#15161a', bg: '#ffc61a', font: 'bold 80px Impact, Arial Black, sans-serif' }), 2.4, 1.2],
-    [3, textTexture(['NO SMOKING'], { fg: '#ffffff', bg: '#d62828', font: 'bold 76px Impact, Arial Black, sans-serif' }), 2.4, 1.2],
-  ];
-  for (const [wi, tex, w, h] of signs) {
-    wallPart(WALLS[wi], decalMaterial(tex), G.wallPlane, 0, 0.01, wi < 2 ? 2.8 : 2.2, [0, 0, 0], [w, h, 1]);
-  }
-}
-
-function addPillarDetails(x, z, i) {
-  box(DMAT.concrete, x, 0.175, z, 2.5, 0.35, 2.5, 0, 3);
-  box(DMAT.concrete, x, 5.85, z, 2.45, 0.3, 2.45, 0, 3);
-  deco(DMAT.hazard, worldBox(2.24, 0.5, 2.24, 0.5), x, 0.6, z);
-  if (i % 2 === 0) {
-    const fz = z + (z > 0 ? -1.18 : 1.18);
-    deco(DMAT.extinguisher, G.cyl, x, 1.25, fz, [0, 0, 0], [0.08, 0.45, 0.08]);
-    deco(DMAT.black, G.cylLow, x, 1.52, fz, [0, 0, 0], [0.03, 0.1, 0.03]);
-    deco(DMAT.black, G.box, x + 0.05, 1.56, fz, [0, 0, 0], [0.12, 0.03, 0.03]);
-    deco(DMAT.metal, G.box, x, 1.25, fz + (z > 0 ? 0.06 : -0.06), [0, 0, 0], [0.18, 0.04, 0.04]);
-  }
-}
-
-function addCoverCap(x, z, w, h, d) {
-  box(DMAT.concrete, x, h - 0.04, z, w + 0.1, 0.08, d + 0.1, 0, 2);
-}
-
-function addCrateDetails(x, z, s, y) {
-  const frame = new THREE.Object3D();
-  frame.position.set(x, y + s / 2, z);
-  frame.rotation.y = Math.floor(rand() * 4) * Math.PI / 2;
-  frame.updateMatrix();
-  const add = (material, geo, lx, ly, lz, ry = 0) => {
-    decorMatrix.compose(decorPos.set(lx, ly, lz), decorQuat.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, ry), decorScale.set(1, 1, 1));
-    decoMatrix(material, geo, decorMatrix.premultiply(frame.matrix));
-  };
-  const t = s * 0.09;
-  const half = s / 2 - t / 2;
-  for (const a of [-1, 1]) {
-    for (const b of [-1, 1]) {
-      add(DMAT.wood, worldBox(s, t, t, 1), 0, a * half, b * half);
-      add(DMAT.wood, worldBox(t, s, t, 1), a * half, 0, b * half);
-      add(DMAT.wood, worldBox(t, t, s, 1), a * half, b * half, 0);
-      for (const c of [-1, 1]) add(DMAT.metal, worldBox(t * 1.15, t * 1.15, t * 1.15, 0.3), a * half, b * half, c * half);
+      wallBox(wall, DMAT.white, t, 0.3, 1.1, 1.3, 2.2, 0.6);
+      wallBox(wall, DMAT.dark, t, 0.61, 1.1, 0.02, 2.0, 0.02);
+      wallBox(wall, DMAT.amber, t - 0.3, 0.61, 1.7, 0.08, 0.04, 0.02);
+      wallBox(wall, DMAT.green, t + 0.3, 0.61, 1.7, 0.08, 0.04, 0.02);
+      const [x, z] = wall.at(t, 0.3);
+      const alongX = Math.abs(Math.sin(wall.ry)) < 0.5;
+      solidOnly(x, z, alongX ? 1.3 : 0.6, 2.2, alongX ? 0.6 : 1.3);
     }
   }
-  const diag = Math.hypot(s - 2 * t, s - 2 * t);
-  for (const side of [-1, 1]) {
-    decorMatrix.compose(decorPos.set(0, 0, side * (s * 0.48 + t * 0.2)), decorQuat.setFromEuler(decorEuler.set(0, 0, Math.PI / 4 * side)), decorScale.set(1, 1, 1));
-    decoMatrix(DMAT.wood, worldBox(diag, t * 0.9, t * 0.5, 1), decorMatrix.premultiply(frame.matrix));
+}
+
+// ----- Interior bulkheads with doorways centred at `doors` -----
+function bulkhead(alongX, fixed, from, to, doors) {
+  const T = 0.8;
+  const at = (t) => (alongX ? [t, fixed] : [fixed, t]);
+  const dims = (len, th) => (alongX ? [len, th] : [th, len]);
+  const segs = [];
+  let t = from;
+  for (const c of doors) {
+    segs.push([t, c - DOOR_W / 2]);
+    t = c + DOOR_W / 2;
   }
-  const stencil = STENCILS[Math.floor(rand() * STENCILS.length)];
-  for (const side of [-1, 1]) {
-    decorMatrix.compose(decorPos.set(side * (s * 0.48 + 0.003), 0, 0), decorQuat.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, side * Math.PI / 2), decorScale.set(s * 0.62, s * 0.31, 1));
-    decoMatrix(stencil, G.wallPlane, decorMatrix.premultiply(frame.matrix));
-  }
-}
-
-function addDrum(x, z, material) {
-  deco(material, G.cyl, x, 0.44, z, [0, rand() * 6, 0], [0.29, 0.88, 0.29]);
-  for (const y of [0.02, 0.3, 0.58, 0.86]) deco(material, G.rib, x, y, z, [0, 0, 0], [0.295, 0.3, 0.295]);
-  deco(DMAT.metal, G.cylLow, x + 0.12, 0.885, z + 0.05, [0, 0, 0], [0.035, 0.02, 0.035]);
-  deco(DMAT.metal, G.cylLow, x - 0.14, 0.885, z - 0.04, [0, 0, 0], [0.025, 0.02, 0.025]);
-  solidOnly(x, z, 0.6, 0.9, 0.6);
-}
-
-function addTires(x, z, n) {
-  for (let i = 0; i < n; i++) deco(DMAT.rubber, G.tire, x + (rand() - 0.5) * 0.08, 0.12 + i * 0.235, z + (rand() - 0.5) * 0.08, [0, 0, 0], [1, 0.95, 1]);
-  solidOnly(x, z, 0.9, n * 0.235 + 0.05, 0.9);
-}
-
-function addSandbags(x, z, length, rows, ry) {
-  const cos = Math.cos(ry);
-  const sin = Math.sin(ry);
-  for (let r = 0; r < rows; r++) {
-    const n = Math.round(length / 0.6) - (r % 2);
-    for (let i = 0; i < n; i++) {
-      const t = (i - (n - 1) / 2) * 0.6;
-      deco(DMAT.sandbag, G.bag, x + t * cos, 0.1 + r * 0.19, z - t * sin, [0, ry + (rand() - 0.5) * 0.15, (rand() - 0.5) * 0.08], [0.32, 0.11, 0.22]);
+  segs.push([t, to]);
+  for (const [a, b] of segs) {
+    if (b - a < 0.05) continue;
+    const [x, z] = at((a + b) / 2);
+    const [w, d] = dims(b - a, T);
+    block(DMAT.hull, x, z, w, CEIL, d, 0, 4);
+    const [bw, bd] = dims(b - a, T + 0.12);
+    box(DMAT.dark, x, 0.15, z, bw, 0.3, bd);
+    const [tw, td] = dims(b - a, T + 0.24);
+    box(DMAT.trim, x, CEIL - 0.35, z, tw, 0.3, td);
+    if (b - a > 1) {
+      const [lw, ld] = dims(b - a - 0.6, T + 0.03);
+      box(DMAT.cyan, x, 1.2, z, lw, 0.03, ld);
+    }
+    for (let r = a + 3; r < b - 1.5; r += 4) {
+      const [rx, rz] = at(r);
+      const [rw, rd] = dims(0.4, T + 0.2);
+      box(DMAT.trim, rx, CEIL / 2, rz, rw, CEIL, rd);
     }
   }
-  const w = Math.abs(cos) * length + Math.abs(sin) * 0.45;
-  const d = Math.abs(sin) * length + Math.abs(cos) * 0.45;
-  solidOnly(x, z, w, rows * 0.19 + 0.05, d);
-}
-
-function addPallets(x, z, n, ry) {
-  for (let p = 0; p < n; p++) {
-    const y = p * 0.145;
-    for (let i = 0; i < 5; i++) box(DMAT.wood, x + Math.sin(ry) * (i - 2) * 0.24, y + 0.133, z + Math.cos(ry) * (i - 2) * 0.24, 1.2, 0.022, 0.14, ry, 1);
-    for (let i = 0; i < 3; i++) box(DMAT.wood, x + Math.sin(ry) * (i - 1) * 0.45, y + 0.072, z + Math.cos(ry) * (i - 1) * 0.45, 1.2, 0.1, 0.1, ry, 1);
-    for (let i = 0; i < 3; i++) box(DMAT.wood, x + Math.sin(ry) * (i - 1) * 0.45, y + 0.011, z + Math.cos(ry) * (i - 1) * 0.45, 1.2, 0.022, 0.12, ry, 1);
-  }
-  solidOnly(x, z, Math.abs(Math.cos(ry)) * 1.2 + Math.abs(Math.sin(ry)) * 1.0, n * 0.145, Math.abs(Math.sin(ry)) * 1.2 + Math.abs(Math.cos(ry)) * 1.0);
-}
-
-function addCone(x, z) {
-  box(DMAT.black, x, 0.015, z, 0.38, 0.03, 0.38, rand(), 1);
-  deco(DMAT.cone, G.cone, x, 0.34, z);
-  deco(DMAT.reflective, G.cyl, x, 0.4, z, [0, 0, 0], [0.085, 0.09, 0.085]);
-}
-
-function addContainer(x, z, material, ry) {
-  const L = 6.06;
-  const H = 2.59;
-  const W = 2.44;
-  box(material, x, H / 2, z, L, H, W, ry, 2.5);
-  const c = Math.cos(ry);
-  const s = Math.sin(ry);
-  const at = (lx, lz) => [x + lx * c + lz * s, z - lx * s + lz * c];
-  for (const lx of [-L / 2, L / 2]) {
-    for (const lz of [-W / 2, W / 2]) {
-      for (const y of [0.09, H - 0.09]) {
-        const [px, pz] = at(lx, lz);
-        box(DMAT.black, px, y, pz, 0.2, 0.18, 0.2, ry, 1);
-      }
-    }
-  }
-  for (const lz of [-W / 2, W / 2]) {
-    for (const y of [0.05, H - 0.05]) {
-      const [px, pz] = at(0, lz);
-      box(material, px, y, pz, L, 0.1, 0.1, ry, 2);
-    }
-  }
-  const endX = L / 2 + 0.03;
-  for (const lz of [-0.85, -0.35, 0.35, 0.85]) {
-    const [px, pz] = at(endX, lz);
-    deco(DMAT.metal, G.cylLow, px, H / 2, pz, [0, 0, 0], [0.025, H - 0.25, 0.025]);
-    const [hx, hz] = at(endX + 0.03, lz);
-    box(DMAT.metal, hx, 1.2, hz, 0.06, 0.2, 0.06, ry, 1);
-  }
-  const [mx, mz] = at(endX - 0.02, 0);
-  box(DMAT.black, mx, H / 2, mz, 0.02, H - 0.2, 0.04, ry, 1);
-  solidOnly(x, z, Math.abs(c) * L + Math.abs(s) * W, H, Math.abs(s) * L + Math.abs(c) * W);
-}
-
-function addLightPole(x, z) {
-  const dir = Math.atan2(-x, -z);
-  deco(DMAT.metal, G.cylLow, x, 3.5, z, [0, 0, 0], [0.08, 7, 0.08]);
-  box(DMAT.concrete, x, 0.15, z, 0.5, 0.3, 0.5, 0, 1);
-  const ax = x + Math.sin(dir) * 0.6;
-  const az = z + Math.cos(dir) * 0.6;
-  box(DMAT.metal, ax, 6.9, az, 0.06, 0.06, 1.2, dir, 1);
-  const hx = x + Math.sin(dir) * 1.2;
-  const hz = z + Math.cos(dir) * 1.2;
-  box(DMAT.black, hx, 6.85, hz, 0.4, 0.14, 0.6, dir, 1);
-  box(DMAT.glow, hx, 6.77, hz, 0.32, 0.02, 0.5, dir, 1);
-  solidOnly(x, z, 0.3, 7, 0.3);
-}
-
-function addFloorDetails() {
-  const paint = DMAT.paintYellow;
-  const line = (x, z, w, d, material = paint) => deco(material, G.plane, x, 0.004, z, [0, 0, 0], [w, 1, d]);
-  for (const s of [-1, 1]) {
-    line(0, s * 24, 48, 0.15);
-    line(s * 24, 0, 0.15, 48);
-  }
-  deco(paint, new THREE.RingGeometry(3.4, 3.58, 64).rotateX(-Math.PI / 2), 0, 0.004, 0);
-  for (let t = 5; t < 23; t += 2) {
+  for (const c of doors) {
+    const [x, z] = at(c);
+    const [hw, hd] = dims(DOOR_W, T);
+    block(DMAT.hull, x, z, hw, CEIL - DOOR_H, hd, DOOR_H, 4);
     for (const s of [-1, 1]) {
-      line(0, s * t, 0.12, 1, DMAT.paintWhite);
-      line(s * t, 0, 1, 0.12, DMAT.paintWhite);
+      const [px, pz] = at(c + s * (DOOR_W / 2 + 0.2));
+      const [pw, pd] = dims(0.5, T + 0.4);
+      box(DMAT.trim, px, DOOR_H / 2, pz, pw, DOOR_H, pd);
+      const [sw, sd] = dims(0.52, T + 0.42);
+      box(DMAT.hazard, px, 0.6, pz, sw, 1.0, sd, 0, 0.5);
+      const [gx, gz] = at(c + s * (DOOR_W / 2 - 0.02));
+      const [gw, gd] = dims(0.06, T + 0.44);
+      box(DMAT.cyan, gx, 2.3, gz, gw, 1.6, gd);
     }
-  }
-  for (let t = -ARENA + 6; t < ARENA; t += 6) {
-    deco(DMAT.seam, G.plane, t, 0.002, 0, [0, 0, 0], [0.025, 1, ARENA * 2]);
-    deco(DMAT.seam, G.plane, 0, 0.002, t, [0, 0, 0], [ARENA * 2, 1, 0.025]);
-  }
-  for (const [x, z] of [[8, 8], [-8, -8], [8, -9.5], [-8, 9.5]]) {
-    deco(DMAT.grate, G.plane, x, 0.005, z, [0, 0, 0], [0.8, 1, 0.8]);
-  }
-  for (const [x, z, r] of [[3, -2, 1.6], [-9, -9, 2.2], [15.5, 12, 1.8], [-16, -12.2, 1.4], [10, 21, 2], [-22, 6, 1.7], [22, -5, 1.5]]) {
-    deco(DMAT.puddle, G.plane, x, 0.006, z, [0, rand() * 6, 0], [r * 1.3, 1, r]);
-  }
-  for (const [x, z, r] of [[6.8, -27.5, 1.2], [-19.5, 26.8, 1], [27, 6.5, 0.9], [-6, 0.5, 0.7], [17, -15, 0.8]]) {
-    deco(DMAT.oil, G.plane, x, 0.007, z, [0, rand() * 6, 0], [r * 1.4, 1, r]);
+    const [lw, ld] = dims(DOOR_W + 0.9, T + 0.4);
+    box(DMAT.trim, x, DOOR_H + 0.2, z, lw, 0.4, ld);
+    const [aw, ad] = dims(DOOR_W * 0.7, T + 0.44);
+    box(DMAT.amber, x, DOOR_H + 0.08, z, aw, 0.05, ad);
+    const [fw, fd] = dims(DOOR_W, T + 0.6);
+    box(DMAT.dark, x, 0.01, z, fw, 0.02, fd);
   }
 }
 
-function addProps() {
-  const drums = [
-    [6.5, -28.9, 'drumRed'], [7.2, -28.8, 'drumBlue'], [6.8, -28.15, 'rust'],
-    [-6.5, 28.9, 'drumBlue'], [-7.2, 28.85, 'drumRed'],
-    [28.9, 19.5, 'rust'], [28.8, 18.8, 'drumRed'], [28.15, 19.2, 'drumBlue'],
-    [-28.9, -19.5, 'drumRed'], [-28.85, -6.5, 'rust'], [-28.2, -6.8, 'drumBlue'],
-    [16.4, 7.4, 'drumRed'], [-16.4, -7.4, 'drumBlue'],
-  ];
-  for (const [x, z, m] of drums) addDrum(x, z, DMAT[m]);
-  addTires(-28.5, 19.5, 4);
-  addTires(-28.3, 18.5, 3);
-  addTires(28.5, -6.5, 4);
-  addTires(28.5, -19.5, 2);
-  addSandbags(10, -7, 3, 4, 0);
-  addSandbags(-10, 7, 3, 4, 0);
-  addSandbags(-21, -10, 2.4, 3, Math.PI / 2);
-  addSandbags(21, 10, 2.4, 3, Math.PI / 2);
-  addPallets(6.5, 28.4, 4, 0);
-  addPallets(-28.4, 6.5, 3, Math.PI / 2);
-  addContainer(-19.5, -ARENA + 1.3, DMAT.containerGreen, 0);
-  addContainer(19.5, ARENA - 1.3, DMAT.containerOrange, 0);
-  for (const [x, z] of [[-2.6, -4.6], [-1.9, -4.9], [2.6, 4.6], [-3.3, 9.9], [3.3, -9.9], [11.6, -5.6]]) addCone(x, z);
+function ceilingDetails() {
+  for (let z = -27; z <= 27; z += 6) box(DMAT.ceilTrim, 0, CEIL - 0.2, z, ARENA * 2, 0.4, 0.4);
+  for (const x of [-20, 0, 20]) {
+    for (let z = -24; z <= 24; z += 6) {
+      if (x === 0 && Math.abs(z - 3) < 3) continue;
+      box(DMAT.ceilDark, x, CEIL - 0.04, z, 3.0, 0.08, 0.9);
+      box(DMAT.light, x, CEIL - 0.09, z, 2.6, 0.04, 0.55);
+    }
+  }
+  for (const x of [-10.5, 10.5]) {
+    deco(DMAT.ceilPipe, G.cylLow, x, CEIL - 0.7, 0, [Math.PI / 2, 0, 0], [0.14, ARENA * 2, 0.14]);
+    deco(DMAT.ceilPipe, G.cylLow, x + 0.4, CEIL - 0.75, 0, [Math.PI / 2, 0, 0], [0.08, ARENA * 2, 0.08]);
+  }
+}
+
+function floorDetails() {
+  for (let v = -28; v <= 28; v += 4) {
+    deco(DMAT.seam, G.plane, v, 0.003, 0, [0, 0, 0], [0.04, 1, ARENA * 2]);
+    deco(DMAT.seam, G.plane, 0, 0.003, v, [0, 0, 0], [ARENA * 2, 1, 0.04]);
+  }
+  const grates = (x, z, n, alongX) => {
+    for (let i = 0; i < n; i++) {
+      const o = (i - (n - 1) / 2) * 1.2;
+      deco(DMAT.grate, G.plane, x + (alongX ? o : 0), 0.005, z + (alongX ? 0 : o), [0, 0, 0], [1.1, 1, 1.1]);
+    }
+  };
+  grates(0, 19.2, 9, true);
+  grates(19.5, 3, 9, false);
+  grates(0, -13.2, 5, true);
+  grates(-26, -20, 6, false);
+  grates(26, -20, 6, false);
+  for (let x = -11; x <= 11; x += 2) box(DMAT.cyan, x, 0.015, 28.6, 0.5, 0.03, 0.12);
+  for (const z of [20.5, 28]) deco(DMAT.paintYellow, G.plane, 0, 0.004, z, [0, 0, 0], [56, 1, 0.12]);
   for (const s of [-1, 1]) {
-    addLightPole(s * (ARENA - 0.6), s * (ARENA - 0.6));
-    addLightPole(s * (ARENA - 0.6), -s * (ARENA - 0.6));
+    deco(DMAT.paintWhite, G.plane, -19.5 + s * 5.2, 0.004, 24.5, [0, 0, 0], [0.15, 1, 7]);
+    deco(DMAT.paintWhite, G.plane, -19.5, 0.004, 24.5 + s * 3.5, [0, 0, 0], [10.4, 1, 0.15]);
   }
 }
 
-function addSkyline() {
-  for (let i = 0; i < 30; i++) {
-    const a = i / 30 * Math.PI * 2 + rand() * 0.1;
-    const r = 80 + rand() * 55;
-    const w = 10 + rand() * 14;
-    const d = 10 + rand() * 14;
-    const h = 14 + rand() * 46;
-    const x = Math.sin(a) * r;
-    const z = Math.cos(a) * r;
-    box(DMAT.buildings[i % DMAT.buildings.length], x, h / 2, z, w, h, d, a, 7);
-    box(DMAT.roof, x, h + 0.4, z, w * 0.4, 0.8, d * 0.4, a, 4);
+// ----- Props -----
+function crate(x, z, s, y = 0) {
+  const k = Math.floor(rand() * 3);
+  const e = s * 0.08;
+  box(MATS.crates[k], x, y + s / 2, z, s * 0.94, s * 0.94, s * 0.94, 0, s);
+  solidOnly(x, z, s, s, s, y);
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) box(DMAT.dark, x + sx * (s / 2 - e / 2), y + s / 2, z + sz * (s / 2 - e / 2), e, s, e);
   }
-  for (let i = 0; i < 46; i++) {
-    const a = rand() * Math.PI * 2;
-    const r = 36 + rand() * 30;
-    const x = Math.sin(a) * r;
-    const z = Math.cos(a) * r;
-    const h = 7 + rand() * 7;
-    deco(DMAT.trunk, G.cylLow, x, h * 0.25, z, [0, 0, 0], [0.22, h * 0.5, 0.22]);
-    if (rand() < 0.5) {
-      for (let k = 0; k < 3; k++) deco(DMAT.foliageDark, G.pine, x, h * (0.45 + k * 0.18), z, [0, 0, 0], [h * (0.28 - k * 0.07), h * 0.32, h * (0.28 - k * 0.07)]);
-    } else {
-      for (let k = 0; k < 4; k++) {
-        deco(DMAT.foliage, G.sphere, x + (rand() - 0.5) * h * 0.25, h * (0.65 + rand() * 0.2), z + (rand() - 0.5) * h * 0.25, [0, 0, 0], [h * 0.22, h * 0.2, h * 0.22]);
-      }
+  for (const yy of [y + e / 2, y + s - e / 2]) {
+    for (const sz of [-1, 1]) box(DMAT.dark, x, yy, z + sz * (s / 2 - e / 2), s, e, e);
+    for (const sx of [-1, 1]) box(DMAT.dark, x + sx * (s / 2 - e / 2), yy, z, e, e, s);
+  }
+  box(k === 1 ? DMAT.cyan : DMAT.amber, x, y + s * 0.78, z, s * 0.6, s * 0.03, s * 0.95);
+  for (const sz of [-1, 1]) {
+    deco(CRATE_LABELS[k], G.wallPlane, x, y + s * 0.42, z + sz * (s * 0.47 + 0.004), [0, sz > 0 ? 0 : Math.PI, 0], [s * 0.6, s * 0.3, 1]);
+  }
+}
+
+// Wall-standing console; front (screen side) faces local +Z rotated by ry.
+function consoleAt(x, z, ry, w = 1.6, screen = 0) {
+  const at = (lx, lz) => [x + lx * Math.cos(ry) + lz * Math.sin(ry), z - lx * Math.sin(ry) + lz * Math.cos(ry)];
+  box(DMAT.dark, x, 0.45, z, w, 0.9, 0.7, ry);
+  const [dx, dz] = at(0, 0.08);
+  deco(DMAT.white, G.box, dx, 0.97, dz, [-0.35, ry, 0, 'YXZ'], [w + 0.1, 0.08, 0.8]);
+  const [bx, bz] = at(0, 0.3);
+  deco(DMAT.amber, G.box, bx, 0.99, bz, [-0.35, ry, 0, 'YXZ'], [w * 0.6, 0.03, 0.05]);
+  const [mx, mz] = at(0, -0.28);
+  box(DMAT.dark, mx, 1.4, mz, w * 0.92, 0.62, 0.06, ry);
+  const [sx, sz] = at(0, -0.245);
+  deco(screenMats[screen], G.wallPlane, sx, 1.4, sz, [0, ry, 0], [w * 0.85, 0.54, 1]);
+  const hw = Math.abs((w / 2) * Math.cos(ry)) + Math.abs(0.4 * Math.sin(ry));
+  const hd = Math.abs((w / 2) * Math.sin(ry)) + Math.abs(0.4 * Math.cos(ry));
+  solidOnly(x, z, hw * 2, 1.1, hd * 2);
+}
+
+const consoleFacing = (x, z, tx, tz, screen) => consoleAt(x, z, Math.atan2(tx - x, tz - z), 1.6, screen);
+
+function barrier(x, z, len, alongX) {
+  const [w, d] = alongX ? [len, 0.6] : [0.6, len];
+  block(DMAT.hull, x, z, w, 1.15, d, 0, 2);
+  box(DMAT.dark, x, 0.15, z, w + 0.06, 0.3, d + 0.06);
+  box(DMAT.trim, x, 1.18, z, w + 0.04, 0.08, d + 0.04);
+  box(DMAT.hazard, x, 0.6, z, w + 0.02, 0.18, d + 0.02, 0, 0.5);
+  box(DMAT.cyan, x, 1.225, z, alongX ? len - 0.3 : 0.06, 0.02, alongX ? 0.06 : len - 0.3);
+}
+
+function reactor(x, z) {
+  solidOnly(x, z, 3, CEIL, 3);
+  deco(DMAT.dark, G.cyl, x, 0.4, z, [0, 0, 0], [2.0, 0.8, 2.0]);
+  deco(DMAT.trim, G.cyl, x, 0.9, z, [0, 0, 0], [1.6, 0.2, 1.6]);
+  deco(DMAT.core, G.cyl, x, CEIL / 2, z, [0, 0, 0], [0.7, CEIL - 1.6, 0.7]);
+  deco(DMAT.glass, G.cyl, x, CEIL / 2, z, [0, 0, 0], [1.05, CEIL - 1.6, 1.05]);
+  for (let y = 1.4; y < CEIL - 1; y += 0.9) deco(DMAT.trim, G.rib, x, y, z, [0, 0, 0], [1.1, 2, 1.1]);
+  for (const [sx, sz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    box(DMAT.trim, x + sx * 1.3, CEIL / 2, z + sz * 1.3, 0.25, CEIL, 0.25);
+    box(DMAT.dark, x + sx * 2.6, 0.06, z + sz * 2.6, sx ? 2.2 : 0.5, 0.12, sz ? 2.2 : 0.5);
+    box(DMAT.cyan, x + sx * 2.6, 0.125, z + sz * 2.6, sx ? 2.2 : 0.08, 0.01, sz ? 2.2 : 0.08);
+  }
+  deco(DMAT.dark, G.cyl, x, CEIL - 0.4, z, [0, 0, 0], [1.8, 0.8, 1.8]);
+  deco(DMAT.amber, G.cylLow, x, CEIL - 0.85, z, [0, 0, 0], [1.81, 0.05, 1.81]);
+}
+
+function generator(x, z, alongX) {
+  const [w, d] = alongX ? [3.2, 2] : [2, 3.2];
+  block(DMAT.rust, x, z, w, 2.4, d, 0, 2);
+  box(DMAT.dark, x, 2.5, z, w - 0.3, 0.2, d - 0.3);
+  box(DMAT.hazard, x, 0.15, z, w + 0.04, 0.3, d + 0.04, 0, 0.5);
+  for (let i = 0; i < 4; i++) {
+    box(DMAT.amber, x, 0.8 + i * 0.3, z, alongX ? w * 0.5 : w + 0.02, 0.06, alongX ? d + 0.02 : d * 0.5);
+  }
+  for (const o of [-0.6, 0.6]) {
+    const px = x + (alongX ? o : 0);
+    const pz = z + (alongX ? 0 : o);
+    deco(DMAT.pipeRed, G.cylLow, px, (2.4 + CEIL) / 2, pz, [0, 0, 0], [0.12, CEIL - 2.4, 0.12]);
+  }
+}
+
+function tank(x, z, r = 0.8, h = 3.2) {
+  solidOnly(x, z, r * 2, h, r * 2);
+  deco(DMAT.pipeBlue, G.cyl, x, h / 2, z, [0, 0, 0], [r, h, r]);
+  deco(DMAT.dark, G.cyl, x, 0.15, z, [0, 0, 0], [r + 0.08, 0.3, r + 0.08]);
+  deco(DMAT.dark, G.cyl, x, h + 0.1, z, [0, 0, 0], [r * 0.8, 0.2, r * 0.8]);
+  for (const y of [0.9, 2.2]) deco(DMAT.trim, G.rib, x, y, z, [0, 0, 0], [r + 0.02, 1, r + 0.02]);
+  deco(DMAT.green, G.cylLow, x, 1.55, z, [0, 0, 0], [r + 0.01, 0.08, r + 0.01]);
+  deco(DMAT.pipe, G.cylLow, x, (h + CEIL) / 2, z, [0, 0, 0], [0.15, CEIL - h, 0.15]);
+}
+
+// Docked dropship, nose towards +X.
+function shuttle(cx, cz) {
+  const L = 8;
+  const W = 3.4;
+  solidOnly(cx, cz, L, 2.9, W);
+  solidOnly(cx - 0.8, cz, 3, 0.16, W + 4.4, 2.42);
+  box(DMAT.white, cx - 0.4, 1.75, cz, L - 1.6, 1.9, W);
+  deco(DMAT.white, G.box, cx + L / 2 - 1.1, 1.55, cz, [0, 0, -0.35], [2.2, 1.4, W * 0.9]);
+  deco(DMAT.cockpit, G.box, cx + L / 2 - 1.0, 2.15, cz, [0, 0, -0.6], [1.3, 0.06, W * 0.7]);
+  box(DMAT.pipeBlue, cx - 0.4, 1.35, cz, L - 1.58, 0.18, W + 0.02);
+  box(DMAT.dark, cx - 0.4, 2.72, cz, L - 2.4, 0.12, W - 0.6);
+  for (const s of [-1, 1]) {
+    deco(DMAT.dark, G.cyl, cx - L / 2 + 0.2, 1.7, cz + s * 0.9, [0, 0, Math.PI / 2], [0.55, 1.4, 0.55]);
+    deco(DMAT.cyan, G.cyl, cx - L / 2 - 0.51, 1.7, cz + s * 0.9, [0, 0, Math.PI / 2], [0.45, 0.04, 0.45]);
+    box(DMAT.dark, cx + 0.8, 1.7, cz + s * (W / 2 + 0.005), 1.6, 1.3, 0.02);
+    box(DMAT.hazard, cx + 0.8, 2.42, cz + s * (W / 2 + 0.01), 1.6, 0.1, 0.02, 0, 0.5);
+    box(s > 0 ? DMAT.green : DMAT.red, cx - 0.8, 2.5, cz + s * (W / 2 + 2.2), 0.3, 0.12, 0.12);
+    for (const fx of [-2.5, 2]) {
+      box(DMAT.dark, cx + fx, 0.4, cz + s * 1.2, 0.2, 0.8, 0.2);
+      box(DMAT.trim, cx + fx, 0.04, cz + s * 1.2, 0.6, 0.08, 0.6);
     }
   }
+  box(DMAT.trim, cx - 0.8, 2.5, cz, 3, 0.15, W + 4.4);
 }
 
-// Outer walls
-const WALL_H = 5;
-addBox(0, -ARENA - 0.5, ARENA * 2 + 2, WALL_H, 1, 'brick');
-addBox(0, ARENA + 0.5, ARENA * 2 + 2, WALL_H, 1, 'brick');
-addBox(-ARENA - 0.5, 0, 1, WALL_H, ARENA * 2, 'brick');
-addBox(ARENA + 0.5, 0, 1, WALL_H, ARENA * 2, 'brick');
+// ----- Layout: hangar (south), cargo bay A (west), reactor B (centre), engineering (east), bridge C (north) -----
+const SIDE_WINDOWS = {
+  west: [[-27, -20], [-14, -6], [-2, 6], [14, 22]],
+  east: [[-26, -18], [-6, 2], [6, 14], [20, 27]],
+};
+hullWall(WALLS[0], [[-14, 14]], { low: 1.2, high: 6.0 });
+hullWall(WALLS[1], [[-12, 12]], { low: 0, high: 5.8, pane: DMAT.shield });
+hullWall(WALLS[2], SIDE_WINDOWS.west);
+hullWall(WALLS[3], SIDE_WINDOWS.east);
+solidOnly(0, -ARENA - 0.5, ARENA * 2 + 2, CEIL, 1);
+solidOnly(0, ARENA + 0.5, ARENA * 2 + 2, CEIL, 1);
+solidOnly(-ARENA - 0.5, 0, 1, CEIL, ARENA * 2);
+solidOnly(ARENA + 0.5, 0, 1, CEIL, ARENA * 2);
+const pad = (list, m) => list.map(([a, b]) => [a - m, b + m]);
+hullDetails(WALLS[0], [[-14.4, 14.4]]);
+hullDetails(WALLS[1], [[-12.4, 12.4]]);
+hullDetails(WALLS[2], [...pad(SIDE_WINDOWS.west, 0.4), [-17.6, -16.4], [10.4, 11.6]]);
+hullDetails(WALLS[3], [...pad(SIDE_WINDOWS.east, 0.4), [16.4, 17.6], [-11.6, -10.4]]);
+wallBox(WALLS[1], DMAT.hazard, 0, 0.1, 6.0, 25, 0.3, 0.2, 0.6);
+for (const t of [-12.4, 12.4]) wallBox(WALLS[1], DMAT.hazard, t, 0.1, 2.9, 0.3, 5.8, 0.2, 0.6);
 
-// Pillars
-for (const [x, z] of [[-12, -12], [12, -12], [-12, 12], [12, 12], [0, -20], [0, 20], [-20, 0], [20, 0]]) {
-  addBox(x, z, 2.2, 6, 2.2, 'pillar');
+bulkhead(true, 17, -ARENA, ARENA, [-20, 0, 20]);
+bulkhead(true, -11, -ARENA, ARENA, [-18, 0, 18]);
+bulkhead(false, -9, -10.6, 16.6, [-4, 10]);
+bulkhead(false, 9, -10.6, 16.6, [-2, 8]);
+
+const SIGN_Y = DOOR_H + 1.1;
+[[-20, SIGNS.cargo], [0, SIGNS.reactor], [20, SIGNS.engineering]].forEach(([x, m]) => {
+  sign(m, x, SIGN_Y, 17.42, 0);
+  sign(SIGNS.hangar, x, SIGN_Y, 16.58, Math.PI);
+});
+[[-18, SIGNS.cargo], [0, SIGNS.reactor], [18, SIGNS.engineering]].forEach(([x, m]) => {
+  sign(SIGNS.bridge, x, SIGN_Y, -10.58, 0);
+  sign(m, x, SIGN_Y, -11.42, Math.PI);
+});
+for (const z of [-4, 10]) {
+  sign(SIGNS.cargo, -8.58, SIGN_Y, z, Math.PI / 2);
+  sign(SIGNS.reactor, -9.42, SIGN_Y, z, -Math.PI / 2);
 }
-[[-12, -12], [12, -12], [-12, 12], [12, 12], [0, -20], [0, 20], [-20, 0], [20, 0]].forEach(([x, z], i) => addPillarDetails(x, z, i));
+for (const z of [-2, 8]) {
+  sign(SIGNS.engineering, 8.58, SIGN_Y, z, -Math.PI / 2);
+  sign(SIGNS.reactor, 9.42, SIGN_Y, z, Math.PI / 2);
+}
 
-// Low cover walls
-addBox(-6, -4, 6, 1.3, 0.8, 'coverLow');
-addCoverCap(-6, -4, 6, 1.3, 0.8);
-addBox(6, 4, 6, 1.3, 0.8, 'coverLow');
-addCoverCap(6, 4, 6, 1.3, 0.8);
-addBox(-4, 7, 0.8, 1.3, 5, 'coverLow');
-addCoverCap(-4, 7, 0.8, 1.3, 5);
-addBox(4, -7, 0.8, 1.3, 5, 'coverLow');
-addCoverCap(4, -7, 0.8, 1.3, 5);
-addBox(-20, -18, 8, 2.5, 0.8, 'coverHigh');
-addCoverCap(-20, -18, 8, 2.5, 0.8);
-addBox(20, 18, 8, 2.5, 0.8, 'coverHigh');
-addCoverCap(20, 18, 8, 2.5, 0.8);
-addBox(18, -21, 0.8, 2.5, 7, 'coverHigh');
-addCoverCap(18, -21, 0.8, 2.5, 7);
-addBox(-18, 21, 0.8, 2.5, 7, 'coverHigh');
-addCoverCap(-18, 21, 0.8, 2.5, 7);
+// Hangar
+shuttle(-19.5, 24.5);
+for (const [x, z, s, y = 0] of [
+  [17, 21.5, 1.6], [18.7, 21.5, 1.6], [17.8, 21.5, 1.4, 1.6], [24, 26.5, 2], [21.8, 27, 1.4], [9, 28, 1.4], [-9, 28, 1.4], [26.5, 20, 1.2],
+]) crate(x, z, s, y);
+// Cargo bay
+for (const [x, z, s, y = 0] of [
+  [-25.5, 9, 2], [-23.3, 9.3, 1.4], [-25.5, 9, 1.4, 2], [-13.5, -3, 1.6], [-15.2, -3, 1.6], [-14.3, -3, 1.4, 1.6],
+  [-26, -5, 1.8], [-24, -6.5, 1.2], [-13.5, 10.5, 1.4], [-19.5, 12.5, 1.6], [-27.5, 2, 1.4], [-19.5, -7, 1.6], [-12, 4, 1.2],
+]) crate(x, z, s, y);
+// Reactor room
+reactor(0, 3);
+barrier(-5.5, 3, 3, false);
+barrier(5.5, 3, 3, false);
+barrier(0, -4.5, 3.5, true);
+barrier(0, 10.5, 3.5, true);
+for (const [x, z] of [[-6.5, -8.5], [6.5, -8.5], [-6.5, 14.5], [6.5, 14.5]]) consoleFacing(x, z, 0, 3, 0);
+// Engineering
+generator(17, 10, true);
+generator(23, -4, false);
+tank(14, -7);
+tank(26.5, 12.5);
+tank(26.5, 9.6, 0.7, 2.8);
+tank(27, -8, 0.9, 3.6);
+crate(20.5, 14.5, 1.4);
+crate(13, 2.5, 1.6);
+barrier(20, 4, 3, true);
+consoleFacing(13, 13, 17, 10, 1);
+// Bridge
+for (const x of [-9, 9]) {
+  block(DMAT.hull, x, -20, 1.4, CEIL, 1.4, 0, 2);
+  box(DMAT.trim, x, 0.2, -20, 1.6, 0.4, 1.6);
+  box(DMAT.trim, x, CEIL - 0.3, -20, 1.6, 0.6, 1.6);
+  box(DMAT.cyan, x, 2.5, -20, 1.44, 0.04, 1.44);
+}
+solidOnly(0, -20, 1.4, 1.0, 1.4);
+deco(DMAT.dark, G.cyl, 0, 0.5, -20, [0, 0, 0], [0.7, 1.0, 0.7]);
+deco(DMAT.cyan, G.cylLow, 0, 1.02, -20, [0, 0, 0], [0.62, 0.04, 0.62]);
+barrier(-5, -14.5, 3, true);
+barrier(5, -14.5, 3, true);
+for (const [x, s] of [[-10, 0], [-5, 2], [5, 2], [10, 0]]) consoleAt(x, -27.5, 0, 1.6, s);
+consoleFacing(-3.8, -23.2, 0, -20, 0);
+consoleFacing(3.8, -23.2, 0, -20, 1);
+for (const [x, z, s] of [[-22, -17, 1.6], [-24, -16.5, 1.2], [22, -17, 1.6], [24, -16.5, 1.2], [-15, -25, 1.4], [15, -25, 1.4], [-27.5, -13.5, 1.4], [27.5, -13.5, 1.4]]) {
+  crate(x, z, s);
+}
 
-// Crates (some stacked so you can climb)
-const crates = [
-  [8, -14, 1.6], [9.6, -14, 1.6], [8.8, -14, 1.6, 1.6],
-  [-8, 14, 1.6], [-9.6, 14, 1.6], [-8.8, 14, 1.6, 1.6],
-  [-15, -6, 1.4], [15, 6, 1.4], [-24, 10, 1.8], [24, -10, 1.8],
-  [-25, -26, 2], [-23, -26, 1.4], [25, 26, 2], [23, 26, 1.4],
-  [2, 13, 1.2], [-2, -13, 1.2], [14, -2, 1.2], [-14, 2, 1.2],
-];
-for (const [x, z, s, y = 0] of crates) addBox(x, z, s, s, s, 'crate', y);
-
-addWallDetails();
-addFloorDetails();
-addProps();
-addSkyline();
+ceilingDetails();
+floorDetails();
 finalizeDecor();
+
+// Animated set dressing.
+const spinners = [];
+{
+  const holoMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(0x38e1ff).multiplyScalar(1.6), wireframe: true, transparent: true, opacity: 0.7, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  const hull = new THREE.OctahedronGeometry(0.5, 1).scale(0.45, 0.22, 1.2);
+  const wings = new THREE.BoxGeometry(1.1, 0.03, 0.4).translate(0, 0, 0.2);
+  const holo = new THREE.Mesh(mergeGeometries([hull.toNonIndexed(), wings.toNonIndexed()]), holoMat);
+  holo.position.set(0, 1.75, -20);
+  scene.add(holo);
+  spinners.push({ mesh: holo, speed: 0.6 });
+  const ringMat = holoMat.clone();
+  ringMat.opacity = 0.35;
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.6, 0.01, 4, 48).rotateX(Math.PI / 2), ringMat);
+  ring.position.set(0, 1.3, -20);
+  scene.add(ring);
+}
 
 // ---------- Collision helpers ----------
 function circleOverlapsBox(x, z, r, b) {
@@ -985,14 +1140,33 @@ const raycaster = new THREE.Raycaster();
 const tmpV = new THREE.Vector3();
 const tmpV2 = new THREE.Vector3();
 
-function lineBlocked(from, to) {
-  tmpV.subVectors(to, from);
-  const dist = tmpV.length();
-  raycaster.set(from, tmpV.normalize());
-  raycaster.far = dist;
-  const hit = raycaster.intersectObjects(worldMeshes, false);
-  raycaster.far = Infinity;
-  return hit.length > 0;
+function slab(o, d, mn, mx, range) {
+  if (Math.abs(d) < 1e-9) return o >= mn && o <= mx;
+  let a = (mn - o) / d;
+  let b = (mx - o) / d;
+  if (a > b) {
+    const t = a;
+    a = b;
+    b = t;
+  }
+  if (a > range[0]) range[0] = a;
+  if (b < range[1]) range[1] = b;
+  return range[0] <= range[1];
+}
+
+// True if the segment passes through any collision box (bot line of sight).
+const segRange = [0, 1];
+function segmentBlocked(from, to) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  for (const b of solids) {
+    segRange[0] = 0;
+    segRange[1] = 1;
+    if (slab(from.x, dx, b.min.x, b.max.x, segRange) && slab(from.y, dy, b.min.y, b.max.y, segRange)
+      && slab(from.z, dz, b.min.z, b.max.z, segRange)) return true;
+  }
+  return false;
 }
 
 // ---------- Audio ----------
@@ -1042,7 +1216,7 @@ const later = (ms, fn) => setTimeout(fn, ms);
 const click = (vol = 0.1, freq = 3200) => playNoise(vol, freq, 0.035);
 
 const sfx = {
-  shot: (s) => { playNoise(s.vol, s.freq, s.dur); playTone(s.vol * 0.6, s.tone, 35, s.dur * 0.8, 'triangle'); },
+  shot: (s) => { playNoise(s.vol * 0.7, s.freq, s.dur * 0.6); playTone(s.vol * 0.7, s.tone, s.toneEnd, s.dur, 'sawtooth'); },
   pump: () => { later(200, () => click(0.14, 2200)); later(420, () => click(0.16, 2600)); },
   bolt: () => { later(250, () => click(0.1, 3000)); later(420, () => click(0.12, 2400)); later(650, () => click(0.12, 2600)); later(850, () => click(0.1, 3000)); },
   magOut: () => click(0.1, 2000),
@@ -1050,7 +1224,13 @@ const sfx = {
   rack: () => { click(0.12, 3000); later(90, () => click(0.12, 2400)); },
   shellIn: () => playTone(0.08, 700, 480, 0.05, 'square'),
   switch: () => { click(0.08, 1800); later(120, () => click(0.06, 2600)); },
-  enemyShot: (dist) => playNoise(Math.max(0.03, 0.25 - dist * 0.006), 1400, 0.15),
+  botShot: (dist, team) => {
+    const v = Math.max(0.02, 0.2 - dist * 0.005);
+    playNoise(v * 0.5, 3000, 0.08);
+    playTone(v, team === 1 ? 1500 : 900, team === 1 ? 400 : 200, 0.12, 'sawtooth');
+  },
+  capture: () => { playTone(0.12, 660, 660, 0.12); later(130, () => playTone(0.12, 880, 880, 0.12)); later(260, () => playTone(0.14, 1320, 1320, 0.2)); },
+  lost: () => { playTone(0.12, 520, 520, 0.15); later(170, () => playTone(0.12, 390, 390, 0.25, 'triangle')); },
   hit: () => playTone(0.12, 900, 600, 0.06, 'square'),
   kill: () => playTone(0.15, 500, 120, 0.25, 'sawtooth'),
   hurt: () => playTone(0.3, 140, 60, 0.2, 'sine'),
@@ -1065,8 +1245,8 @@ const weaponScene = new THREE.Scene();
 weaponScene.environment = envMap;
 weaponScene.environmentIntensity = 0.45;
 const weaponCamera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 10);
-weaponScene.add(new THREE.HemisphereLight(0xbfdcff, 0x7a6248, 0.4));
-const vmKey = new THREE.DirectionalLight(0xfff0d8, 2.2);
+weaponScene.add(new THREE.HemisphereLight(0xb8ccff, 0x30343c, 0.45));
+const vmKey = new THREE.DirectionalLight(0xe8f0ff, 2.2);
 vmKey.position.set(-1, 2, 1.5);
 weaponScene.add(vmKey);
 const vmRim = new THREE.DirectionalLight(0xcfe2ff, 0.9);
@@ -1085,10 +1265,12 @@ const flashLight = new THREE.PointLight(0xffc98a, 0, 1.5);
 const worldFlash = new THREE.PointLight(0xffc98a, 0, 10);
 scene.add(worldFlash);
 
+const WHITE = new THREE.Color(0xffffff);
 const arsenal = WEAPONS.map((def) => {
   const model = buildWeaponModel(def);
   model.group.visible = false;
   viewmodel.add(model.group);
+  model.glowBase = model.glow ? model.glow.emissiveIntensity : 0;
   return { def, model, mag: def.magSize, reserve: def.reserve };
 });
 
@@ -1100,6 +1282,10 @@ function equip(index) {
   flash.position.z -= 0.01;
   flash.scale.setScalar(w.def.flash * 2);
   flashLight.position.copy(w.model.muzzle);
+  const tint = new THREE.Color(w.def.color);
+  flash.material.color.copy(tint).lerp(WHITE, 0.35);
+  flashLight.color.copy(tint);
+  worldFlash.color.copy(tint);
   player.current = index;
   player.ejectAt = 0;
   resetParts(w);
@@ -1133,7 +1319,7 @@ function spawnSprite(point, color, size, life, vel, extra = {}) {
   effects.push({ mesh: sprite, life, max: life, base: size, vel, ...extra.fx });
 }
 
-function spawnImpact(point, color, normal = null, sparks = false) {
+function spawnImpact(point, color, normal = null, sparks = false, sparkColor = 0xffc46a) {
   const n = normal || new THREE.Vector3(0, 1, 0);
   for (let i = 0; i < 4; i++) {
     const vel = n.clone().multiplyScalar(0.4 + Math.random() * 0.8)
@@ -1144,20 +1330,21 @@ function spawnImpact(point, color, normal = null, sparks = false) {
   for (let i = 0; i < 6; i++) {
     const vel = n.clone().multiplyScalar(2 + Math.random() * 3)
       .add(new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.2, Math.random() - 0.5).multiplyScalar(4));
-    spawnSprite(point, 0xffc46a, 0.035, 0.12 + Math.random() * 0.12, vel, { mat: { blending: THREE.AdditiveBlending }, fx: { gravity: 9.8 } });
+    spawnSprite(point, sparkColor, 0.035, 0.12 + Math.random() * 0.12, vel, { mat: { blending: THREE.AdditiveBlending }, fx: { gravity: 9.8 } });
   }
 }
 
 const casingGeo = new THREE.CylinderGeometry(1, 1, 1, 10);
 const casingMats = {
-  brass: new THREE.MeshStandardMaterial({ color: 0xe0ac48, roughness: 0.28, metalness: 1 }),
-  hull: new THREE.MeshStandardMaterial({ color: 0xd2232a, roughness: 0.5 }),
+  cell: new THREE.MeshStandardMaterial({ color: 0x9aa3ae, roughness: 0.3, metalness: 1, emissive: 0x38e1ff, emissiveIntensity: 0.6 }),
+  hull: new THREE.MeshStandardMaterial({ color: 0x3a3f46, roughness: 0.4, metalness: 0.6, emissive: 0xff8a2a, emissiveIntensity: 0.8 }),
 };
-const CASINGS = { glock: [0.0048, 0.019], mp5: [0.0048, 0.019], ak47: [0.0056, 0.039], r870: [0.0105, 0.07], m24: [0.006, 0.051] };
+// Spent energy cells vented from each weapon: [radius, length].
+const CASINGS = { ion: [0.006, 0.02], pulse: [0.006, 0.024], plasma: [0.008, 0.035], scatter: [0.011, 0.05], rail: [0.008, 0.06] };
 
 function ejectCasing(w) {
   const [r, len] = CASINGS[w.def.id];
-  const mesh = new THREE.Mesh(casingGeo, w.def.id === 'r870' ? casingMats.hull : casingMats.brass);
+  const mesh = new THREE.Mesh(casingGeo, w.def.id === 'scatter' ? casingMats.hull : casingMats.cell);
   mesh.scale.set(r, len, r);
   mesh.rotation.set(Math.random() * 3, 0, Math.PI / 2);
   mesh.frustumCulled = false;
@@ -1206,11 +1393,24 @@ function clearDecals() {
   decals.length = 0;
 }
 
-function spawnTracer(from, to, color) {
-  const geo = new THREE.BufferGeometry().setFromPoints([from.clone(), to.clone()]);
-  const mesh = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 }));
+const boltGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true).translate(0, 0.5, 0);
+const UP = new THREE.Vector3(0, 1, 0);
+const boltDir = new THREE.Vector3();
+
+// Glowing energy bolt from one point to another.
+function spawnBolt(from, to, color, radius = 0.016, life = 0.07) {
+  boltDir.subVectors(to, from);
+  const len = boltDir.length();
+  if (len < 0.01) return;
+  const mesh = new THREE.Mesh(boltGeo, new THREE.MeshBasicMaterial({
+    color: new THREE.Color(color).multiplyScalar(2.5), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  }));
+  mesh.position.copy(from);
+  mesh.quaternion.setFromUnitVectors(UP, boltDir.divideScalar(len));
+  mesh.scale.set(radius, len, radius);
+  mesh.frustumCulled = false;
   scene.add(mesh);
-  effects.push({ mesh, life: 0.08, max: 0.08, grow: 0, ownGeo: true });
+  effects.push({ mesh, life, max: life });
 }
 
 function updateEffects(dt) {
@@ -1235,15 +1435,15 @@ function updateEffects(dt) {
   }
 }
 
-// ---------- Enemies ----------
-const enemies = [];
+// ---------- Soldiers (allied and hostile bots) ----------
+const bots = [];
 const GEO = {
   torso: new THREE.CapsuleGeometry(0.19, 0.32, 6, 16),
   pelvis: new THREE.CapsuleGeometry(0.15, 0.12, 4, 12),
   vest: new THREE.BoxGeometry(0.44, 0.44, 0.3),
   neck: new THREE.CylinderGeometry(0.055, 0.065, 0.12, 12),
   head: new THREE.SphereGeometry(0.125, 20, 16),
-  helmet: new THREE.SphereGeometry(0.15, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.47),
+  helmet: new THREE.SphereGeometry(0.15, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.6),
   thigh: new THREE.CapsuleGeometry(0.085, 0.32, 4, 12),
   shin: new THREE.CapsuleGeometry(0.07, 0.34, 4, 12),
   boot: new THREE.BoxGeometry(0.13, 0.1, 0.28),
@@ -1251,14 +1451,20 @@ const GEO = {
   forearm: new THREE.CapsuleGeometry(0.052, 0.22, 4, 10),
 };
 const SHARED_MATS = {
-  gear: new THREE.MeshStandardMaterial({ color: 0x1d1f22, roughness: 0.7, metalness: 0.1 }),
-  eye: new THREE.MeshStandardMaterial({ color: 0xf2f0ea, roughness: 0.3 }),
-  dark: new THREE.MeshStandardMaterial({ color: 0x22160f, roughness: 0.6 }),
+  gear: new THREE.MeshStandardMaterial({ color: 0x1d1f22, roughness: 0.6, metalness: 0.3 }),
+  dark: new THREE.MeshStandardMaterial({ color: 0x0e0f11, roughness: 0.6 }),
   lens: new THREE.MeshStandardMaterial({ color: 0x0c1420, metalness: 0.9, roughness: 0.05 }),
-  patch: new THREE.MeshStandardMaterial({ color: 0xffc61a, roughness: 0.6, emissive: 0xffc61a, emissiveIntensity: 0.15 }),
   metal: new THREE.MeshStandardMaterial({ color: 0xb8bcc0, roughness: 0.3, metalness: 1 }),
   gun: gunMat,
 };
+const TEAM_MATS = {};
+for (const team of [1, -1]) {
+  const s = TEAM_STYLE[team];
+  TEAM_MATS[team] = {
+    visor: new THREE.MeshStandardMaterial({ color: 0x050608, emissive: s.glow, emissiveIntensity: 2.2, roughness: 0.1, metalness: 0.8 }),
+    patch: new THREE.MeshStandardMaterial({ color: s.glow, emissive: s.glow, emissiveIntensity: 1.2, roughness: 0.4 }),
+  };
+}
 const ENEMY_MUZZLE = new THREE.Vector3(0.16, 1.34, -1.19);
 
 const box3 = (w, h, d) => new THREE.BoxGeometry(w, h, d);
@@ -1292,72 +1498,63 @@ const TEMPLATES = {
     ['vest', GEO.vest, [0, 1.34, 0]],
     ...[-1, 1].map((sx) => ['vest', box3(0.09, 0.05, 0.34), [sx * 0.14, 1.58, 0]]),
     ...[-0.12, 0, 0.12].flatMap((px) => [
-      ['vest', box3(0.1, 0.14, 0.07), [px, 1.2, -0.18]],
-      ['vest', box3(0.105, 0.03, 0.078), [px, 1.275, -0.18]],
-      ['gear', box3(0.07, 0.03, 0.03), [px, 1.3, -0.18]],
+      ['uniform', box3(0.1, 0.14, 0.07), [px, 1.2, -0.18]],
+      ['gear', box3(0.105, 0.03, 0.078), [px, 1.275, -0.18]],
     ]),
-    ['vest', box3(0.18, 0.1, 0.04), [0, 1.43, -0.165]],
-    ['patch', box3(0.07, 0.045, 0.005), [0.11, 1.5, -0.152]],
-    ['vest', box3(0.07, 0.14, 0.07), [-0.21, 1.42, -0.08]],
-    ['gear', unitCyl, [-0.21, 1.66, -0.08], [0, 0, 0], [0.006, 0.36, 0.006]],
+    ['uniform', box3(0.18, 0.1, 0.04), [0, 1.43, -0.165]],
+    ['patch', box3(0.07, 0.02, 0.005), [0.11, 1.5, -0.152]],
+    ['patch', box3(0.3, 0.012, 0.005), [0, 1.36, -0.152]],
     ['gear', unitCyl, [0, 1.07, 0], [0, 0, 0], [0.2, 0.06, 0.16]],
     ['metal', box3(0.06, 0.04, 0.02), [0, 1.07, -0.165]],
     ['gear', box3(0.07, 0.17, 0.12), [0.23, 0.97, 0]],
-    ['vest', box3(0.32, 0.36, 0.15), [0, 1.36, 0.22]],
-    ['vest', box3(0.3, 0.06, 0.16), [0, 1.52, 0.225]],
-    ...[-1, 1].map((sx) => ['vest', box3(0.05, 0.18, 0.1), [sx * 0.18, 1.3, 0.22]]),
-    ['pants', unitCyl, [0, 1.58, 0.22], [0, 0, HALF_PI], [0.055, 0.3, 0.055]],
-    ['uniform', new THREE.CylinderGeometry(0.1, 0.11, 0.05, 14), [0, 1.585, 0]],
+    ['uniform', box3(0.34, 0.42, 0.18), [0, 1.36, 0.23]],
+    ...[-1, 1].flatMap((sx) => [
+      ['metal', unitCyl, [sx * 0.08, 1.42, 0.33], [0, 0, 0], [0.05, 0.34, 0.05]],
+      ['patch', unitCyl, [sx * 0.08, 1.22, 0.33], [0, 0, 0], [0.04, 0.03, 0.04]],
+    ]),
+    ['gear', unitCyl, [0, 1.58, 0.22], [0, 0, HALF_PI], [0.055, 0.3, 0.055]],
+    ['uniform', new THREE.CylinderGeometry(0.11, 0.12, 0.07, 14), [0, 1.59, 0]],
     ['skin', GEO.neck, [0, 1.62, 0]],
     ...[-1, 1].flatMap((sx) => [
-      ['eye', unitSphere, [sx * 0.042, 1.785, -0.11], [0, 0, 0], [0.018, 0.014, 0.012]],
-      ['dark', unitSphere, [sx * 0.042, 1.785, -0.12], [0, 0, 0], [0.008, 0.008, 0.005]],
-      ['dark', box3(0.04, 0.008, 0.01), [sx * 0.042, 1.806, -0.116], [0, 0, -sx * 0.12]],
-      ['skin', unitSphere, [sx * 0.124, 1.77, 0], [0, 0, 0], [0.016, 0.03, 0.022]],
-      ['gear', box3(0.012, 0.15, 0.012), [sx * 0.122, 1.735, -0.02]],
-      ['gear', box3(0.02, 0.03, 0.12), [sx * 0.148, 1.84, 0.01]],
+      ['gear', unitCyl, [sx * 0.148, 1.79, 0], [0, 0, HALF_PI], [0.04, 0.04, 0.04]],
+      ['patch', unitCyl, [sx * 0.17, 1.79, 0], [0, 0, HALF_PI], [0.022, 0.005, 0.022]],
     ]),
-    ['skin', box3(0.022, 0.042, 0.03), [0, 1.76, -0.124]],
-    ['dark', box3(0.045, 0.006, 0.01), [0, 1.725, -0.117]],
-    ['gear', new THREE.TorusGeometry(0.146, 0.008, 6, 24), [0, 1.84, 0], [HALF_PI, 0, 0]],
-    ['gear', box3(0.06, 0.05, 0.02), [0, 1.9, -0.122], [-0.6, 0, 0]],
-    ['lens', box3(0.17, 0.045, 0.02), [0, 1.835, -0.148], [-0.2, 0, 0]],
+    ['visor', new THREE.SphereGeometry(0.152, 20, 8, -Math.PI * 0.82, Math.PI * 0.64, Math.PI * 0.36, Math.PI * 0.2), [0, 1.8, 0]],
+    ['gear', box3(0.1, 0.05, 0.05), [0, 1.69, -0.12]],
+    ['gear', box3(0.02, 0.18, 0.03), [0.06, 1.96, 0.05]],
   ]),
   upperArm: bake([
-    ['uniform', GEO.upperArm, [0, -0.15, 0]],
-    ['vest', unitSphere, [0, -0.02, 0], [0, 0, 0], [0.075, 0.06, 0.075]],
-    ['patch', box3(0.005, 0.05, 0.06), [0.062, -0.1, 0]],
+    ['pants', GEO.upperArm, [0, -0.15, 0]],
+    ['vest', unitSphere, [0, -0.02, 0], [0, 0, 0], [0.085, 0.07, 0.085]],
+    ['patch', box3(0.005, 0.05, 0.06), [0.07, -0.1, 0]],
   ]),
   forearm: bake([
-    ['uniform', GEO.forearm, [0, -0.14, 0]],
-    ['gear', unitSphere, [0, -0.01, 0.02], [0, 0, 0], [0.062, 0.07, 0.06]],
-    ['uniform', unitCyl, [0, -0.25, 0], [0, 0, 0], [0.058, 0.04, 0.058]],
+    ['pants', GEO.forearm, [0, -0.14, 0]],
+    ['uniform', unitCyl, [0, -0.16, 0], [0, 0, 0], [0.065, 0.16, 0.065]],
+    ['patch', box3(0.04, 0.02, 0.005), [0, -0.16, -0.066]],
     ['gear', unitSphere, [0, -0.29, 0], [0, 0, 0], [0.048, 0.06, 0.04]],
-    ['gear', box3(0.06, 0.05, 0.03), [0, -0.33, -0.02]],
   ]),
   shin: bake([
-    ['gear', box3(0.12, 0.13, 0.04), [0, -0.02, -0.08]],
+    ['vest', box3(0.12, 0.16, 0.05), [0, -0.02, -0.08]],
+    ['uniform', box3(0.11, 0.24, 0.03), [0, -0.22, -0.07]],
     ['boots', GEO.boot, [0, -0.43, -0.04]],
     ['gear', box3(0.14, 0.03, 0.3), [0, -0.485, -0.04]],
     ['boots', unitCyl, [0, -0.36, 0], [0, 0, 0], [0.078, 0.12, 0.078]],
-    ['dark', box3(0.06, 0.006, 0.12), [0, -0.378, -0.11]],
   ]),
   rifle: bake([
-    ['gun', box3(0.06, 0.09, 0.42), [0, 0, 0]],
-    ['gear', box3(0.07, 0.08, 0.26), [0, 0.005, -0.34]],
-    ['gun', unitCyl, [0, 0.02, -0.55], [HALF_PI, 0, 0], [0.012, 0.2, 0.012]],
-    ['gun', unitCyl, [0, 0.02, -0.66], [HALF_PI, 0, 0], [0.018, 0.06, 0.018]],
-    ['gun', box3(0.045, 0.18, 0.08), [0, -0.11, -0.08], [0.25, 0, 0]],
+    ['gun', box3(0.07, 0.1, 0.46), [0, 0, 0]],
+    ['uniform', box3(0.075, 0.06, 0.3), [0, 0.03, -0.3]],
+    ['patch', box3(0.078, 0.012, 0.26), [0, 0.0, -0.3]],
+    ['gun', unitCyl, [0, 0.02, -0.55], [HALF_PI, 0, 0], [0.02, 0.2, 0.02]],
+    ['patch', unitCyl, [0, 0.02, -0.66], [HALF_PI, 0, 0], [0.024, 0.03, 0.024]],
+    ['gun', box3(0.045, 0.16, 0.08), [0, -0.11, -0.08], [0.25, 0, 0]],
     ['gear', box3(0.04, 0.11, 0.05), [0, -0.08, 0.08], [-0.3, 0, 0]],
-    ['gun', unitCyl, [0, 0, 0.24], [HALF_PI, 0, 0], [0.018, 0.2, 0.018]],
-    ['gear', box3(0.05, 0.11, 0.18), [0, -0.025, 0.36]],
-    ['gun', box3(0.03, 0.03, 0.06), [0, 0.06, -0.05]],
-    ['gear', unitCyl, [0, 0.09, -0.05], [HALF_PI, 0, 0], [0.022, 0.11, 0.022]],
-    ['lens', unitCyl, [0, 0.09, -0.106], [HALF_PI, 0, 0], [0.019, 0.004, 0.019]],
-    ['gear', box3(0.02, 0.008, 0.5), [0.035, -0.05, 0.05]],
+    ['uniform', box3(0.06, 0.12, 0.2), [0, -0.02, 0.32]],
+    ['gear', box3(0.03, 0.05, 0.12), [0, 0.08, -0.05]],
+    ['patch', box3(0.02, 0.02, 0.005), [0, 0.08, 0.012]],
   ]),
 };
-const POCKETS = [-1, 1].map((side) => bake([['pants', box3(0.06, 0.14, 0.12), [side * 0.085, -0.24, 0]]]));
+const POCKETS = [-1, 1].map((side) => bake([['vest', box3(0.06, 0.14, 0.12), [side * 0.085, -0.24, 0]]]));
 
 function part(geo, mat, x, y, z, parent) {
   const m = new THREE.Mesh(geo, mat);
@@ -1395,71 +1592,87 @@ function createArm(shoulderX, shoulderRot, elbowRot, mats, group) {
   return shoulder;
 }
 
-function createEnemy(x, z, wave) {
+const BOT_NAMES = {
+  1: ['Vega', 'Orion', 'Lyra', 'Rigel', 'Nova', 'Altair', 'Deneb'],
+  [-1]: ['Raider', 'Reaver', 'Marauder', 'Corsair', 'Brute', 'Stalker', 'Warden', 'Hunter'],
+};
+
+function createBot(team, x, z, name) {
   const group = new THREE.Group();
+  const s = TEAM_STYLE[team];
   const std = (color, roughness, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
   const mats = {
-    uniform: std(COLORS.uniform, 0.85),
-    pants: std(COLORS.pants, 0.9),
-    vest: std(COLORS.vest, 0.8),
-    helmet: std(COLORS.helmet, 0.6, 0.1),
-    skin: std(COLORS.skin, 0.6),
-    boots: std(COLORS.boots, 0.7),
+    uniform: std(s.armor, 0.4, 0.3),
+    pants: std(s.suit, 0.8),
+    vest: std(s.plate, 0.4, 0.4),
+    helmet: std(s.helmet, 0.3, 0.4),
+    skin: std(s.under, 0.7),
+    boots: std(s.boots, 0.6, 0.2),
   };
+  const look = { ...mats, ...TEAM_MATS[team] };
 
-  const torso = part(GEO.torso, mats.uniform, 0, 1.33, 0, group);
+  const torso = part(GEO.torso, mats.pants, 0, 1.33, 0, group);
   torso.scale.set(1.15, 1, 0.75);
-  attach(TEMPLATES.body, mats, group);
+  attach(TEMPLATES.body, look, group);
   const head = part(GEO.head, mats.skin, 0, 1.76, 0, group);
-  const helmet = part(GEO.helmet, mats.helmet, 0, 1.8, 0.01, group);
+  const helmet = part(GEO.helmet, mats.helmet, 0, 1.79, 0.01, group);
 
-  const legL = createLeg(-1, mats, group);
-  const legR = createLeg(1, mats, group);
-  createArm(0.24, [-1.1, 0, -0.2], [-0.9, 0, 0], mats, group);
-  createArm(-0.24, [-1.3, 0, 0.5], [-0.25, 0, 0], mats, group);
+  const legL = createLeg(-1, look, group);
+  const legR = createLeg(1, look, group);
+  createArm(0.24, [-1.1, 0, -0.2], [-0.9, 0, 0], look, group);
+  createArm(-0.24, [-1.3, 0, 0.5], [-0.25, 0, 0], look, group);
 
   const rifle = new THREE.Group();
   rifle.position.set(0.16, 1.32, -0.5);
   group.add(rifle);
-  attach(TEMPLATES.rifle, mats, rifle);
+  attach(TEMPLATES.rifle, look, rifle);
 
   group.position.set(x, 0, z);
+  const heading = team === 1 ? 0 : Math.PI;
+  group.rotation.y = heading;
   scene.add(group);
 
-  const enemy = {
-    group, legL, legR, mats,
+  const bot = {
+    team, name, group, legL, legR, mats,
     hitboxes: [torso, head, helmet, ...legL.hitboxes, ...legR.hitboxes],
     health: 100,
-    speed: 2.4 + Math.min(wave, 10) * 0.25 + Math.random() * 0.6,
-    fireCooldown: 1.5 + Math.random() * 1.5,
-    fireRate: Math.max(0.9, 2.2 - wave * 0.12),
-    accuracy: Math.min(0.75, 0.35 + wave * 0.04),
+    speed: 3.1 + Math.random() * 0.5,
+    fireCooldown: 0.8 + Math.random(),
+    fireRate: 0.65,
+    accuracy: 0.5,
     strafe: Math.random() < 0.5 ? -1 : 1,
     strafeTimer: 1 + Math.random() * 2,
     path: null,
     repath: 0,
     walk: Math.random() * 10,
+    stride: 0,
     flash: 0,
     dead: false,
     deathTime: 0,
+    target: null,
+    scan: Math.random() * 0.3,
+    goal: null,
+    goalPoint: null,
+    goalTimer: 0,
+    heading,
   };
-  for (const m of enemy.hitboxes) m.userData.enemy = enemy;
+  for (const m of bot.hitboxes) m.userData.bot = bot;
   head.userData.head = true;
   helmet.userData.head = true;
-  enemies.push(enemy);
-  return enemy;
+  bots.push(bot);
+  return bot;
 }
 
-function removeEnemy(enemy) {
-  scene.remove(enemy.group);
-  for (const m of Object.values(enemy.mats)) m.dispose();
-  enemies.splice(enemies.indexOf(enemy), 1);
+function removeBot(bot) {
+  scene.remove(bot.group);
+  for (const m of Object.values(bot.mats)) m.dispose();
+  bots.splice(bots.indexOf(bot), 1);
 }
 
-function enemyShootables() {
+function hostileShootables() {
   const list = [];
-  for (const e of enemies) {
-    if (!e.dead) list.push(...e.hitboxes);
+  for (const b of bots) {
+    if (b.team === -1 && !b.dead) list.push(...b.hitboxes);
   }
   return list;
 }
@@ -1469,16 +1682,17 @@ const pickups = [];
 const PICKUP_MATS = {
   kit: new THREE.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.35 }),
   cross: new THREE.MeshStandardMaterial({ color: 0xe02020, roughness: 0.4, emissive: 0xe02020, emissiveIntensity: 0.4 }),
-  can: new THREE.MeshStandardMaterial({ color: 0x4f6b2c, roughness: 0.45, metalness: 0.6 }),
+  can: new THREE.MeshStandardMaterial({ color: 0xd8dde3, roughness: 0.35, metalness: 0.5 }),
+  cell: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x38e1ff, emissiveIntensity: 2.5 }),
   stencil: new THREE.MeshStandardMaterial({ color: 0xffd23f, roughness: 0.5, emissive: 0xffd23f, emissiveIntensity: 0.3 }),
   handle: new THREE.MeshStandardMaterial({ color: 0x2a2c2e, roughness: 0.4, metalness: 0.8 }),
   latch: new THREE.MeshStandardMaterial({ color: 0xc8ccd0, roughness: 0.25, metalness: 1 }),
-  label: decalMaterial(textTexture(['7.62 MM', 'BALL M80'], { fg: '#ffd23f', font: 'bold 84px Impact, Arial Black, sans-serif' }), { emissive: 0x332a08 }),
+  label: decalMaterial(textTexture(['PLASMA', 'CELLS'], { fg: '#1a8fd8', font: 'bold 84px Impact, Arial Black, sans-serif' }), { emissive: 0x0a2233 }),
   medLabel: decalMaterial(textTexture(['FIRST AID'], { fg: '#d91e1e', font: 'bold 92px Impact, Arial Black, sans-serif' })),
 };
 const PICKUP_GLOW = {
   health: new THREE.MeshBasicMaterial({ color: 0x2ee86b, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
-  ammo: new THREE.MeshBasicMaterial({ color: 0xffb627, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
+  ammo: new THREE.MeshBasicMaterial({ color: 0x38e1ff, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
 };
 
 function buildPickup(type) {
@@ -1516,6 +1730,7 @@ function buildPickup(type) {
     part(new THREE.BoxGeometry(0.05, 0.14, 0.03), PICKUP_MATS.latch, 0.235, 0.09, 0, g).rotation.z = 0.2;
     const hinge = part(new THREE.CylinderGeometry(0.012, 0.012, 0.44, 8), PICKUP_MATS.handle, 0, 0.13, 0.115, g);
     hinge.rotation.z = Math.PI / 2;
+    for (const x of [-0.1, 0.1]) part(new THREE.CylinderGeometry(0.03, 0.03, 0.08, 12), PICKUP_MATS.cell, x, 0.2, -0.05, g);
   }
   const ring = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.42, 40), PICKUP_GLOW[type]);
   ring.rotation.x = -Math.PI / 2;
@@ -1559,16 +1774,64 @@ const player = {
   sprintPose: 0,
   recoil: 0,
   bob: 0,
+  dead: false,
+  respawn: 0,
 };
 
 const game = {
   state: 'menu', // menu | playing | paused | over
   score: 0,
-  wave: 0,
-  waveDelay: 0,
   kills: 0,
+  deaths: 0,
   damageFlash: 0,
+  tickets: { 1: 0, [-1]: 0 },
+  bleed: 0,
+  respawns: [],
 };
+
+// Ship sections to capture. `start` is the initial owner (1 allies, -1 hostiles, 0 neutral).
+const POINTS = [
+  { id: 'A', name: 'Cargo Bay', x: -19.5, z: 3, r: 5, inner: 0, start: 0 },
+  { id: 'B', name: 'Reactor', x: 0, z: 3, r: 5.5, inner: 2.4, start: 0 },
+  { id: 'C', name: 'Bridge', x: 0, z: -20, r: 5, inner: 1.3, start: -1 },
+];
+const PLAYER_SPAWNS = [[0, 26], [-5, 25.5], [5, 25.5]];
+const ALLY_SPAWNS = [[-4, 27.5], [4, 27.5], [-8, 23.5], [8, 23.5], [0, 22], [-3, 23], [3, 23]];
+const ENEMY_SPAWNS = [[-22, -26], [22, -26], [-17, -28], [17, -28], [-25, -22], [25, -22], [-6, -26], [6, -26]];
+const ALLY_BOTS = 5;
+const ENEMY_BOTS = 6;
+const START_TICKETS = 150;
+const CAPTURE_RATE = 0.12;
+const RESPAWN_TIME = 5;
+const BLEED_INTERVAL = 5;
+const OWNER_COLORS = { 1: new THREE.Color(0x3aa8ff), 0: new THREE.Color(0xdfe4ea), [-1]: new THREE.Color(0xff4a3a) };
+
+const letterTex = (letter) => canvasTexture(128, (g, s) => {
+  g.fillStyle = '#fff';
+  g.strokeStyle = '#fff';
+  g.font = 'bold 84px "Segoe UI", Arial, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(letter, s / 2, s / 2 + 4);
+  g.lineWidth = 6;
+  g.beginPath();
+  g.arc(s / 2, s / 2, s / 2 - 5, 0, Math.PI * 2);
+  g.stroke();
+});
+for (const p of POINTS) {
+  const additive = { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending };
+  const ringMat = new THREE.MeshBasicMaterial({ ...additive, opacity: 0.7, side: THREE.DoubleSide });
+  const bandMat = new THREE.MeshBasicMaterial({ ...additive, opacity: 0.12, side: THREE.DoubleSide });
+  const letterMat = new THREE.MeshBasicMaterial({ ...additive, opacity: 0.8, map: letterTex(p.id) });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(p.r - 0.15, p.r, 72).rotateX(-Math.PI / 2), ringMat);
+  ring.position.set(p.x, 0.03, p.z);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(p.r, p.r, 0.5, 72, 1, true), bandMat);
+  band.position.set(p.x, 0.25, p.z);
+  const letter = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4).rotateX(-Math.PI / 2), letterMat);
+  letter.position.set(p.x, 0.035, p.z + p.r - 1.1);
+  scene.add(ring, band, letter);
+  Object.assign(p, { mats: [ringMat, bandMat, letterMat], owner: p.start, progress: p.start, allies: 0, hostiles: 0, playerIn: false });
+}
 
 const keys = {};
 // Right-hand keys mirror WASD so the mouse can be used with the left hand.
@@ -1598,62 +1861,257 @@ let mouseDown = false;
 let aimDown = false;
 let triggerQueued = false;
 
-const SPAWN_POINTS = [];
-for (let i = -26; i <= 26; i += 13) {
-  SPAWN_POINTS.push([i, -27], [i, 27], [-27, i], [27, i]);
-}
-
-function resetGame() {
-  for (const e of [...enemies]) removeEnemy(e);
-  for (const p of [...pickups]) removePickup(p);
-  clearDecals();
-  Object.assign(player, {
-    yaw: 0, pitch: 0, onGround: true, health: MAX_HEALTH, switchTimer: 0, reloading: 0, reloadPose: 0,
-    fireCooldown: 0, ejectAt: 0, cycle: 10, flashTime: 0, ads: 0, sprintPose: 0, recoil: 0, bob: 0,
-  });
+function refillAmmo() {
   for (const w of arsenal) {
     w.mag = w.def.magSize;
     w.reserve = w.def.reserve;
   }
+}
+
+function placePlayerAtSpawn() {
+  const [x, z] = PLAYER_SPAWNS[Math.floor(Math.random() * PLAYER_SPAWNS.length)];
+  player.pos.set(x, 0, z);
+  player.vel.set(0, 0, 0);
+  player.yaw = 0;
+  player.pitch = 0;
+}
+
+function spawnBot(team, name, slot) {
+  const spawns = team === 1 ? ALLY_SPAWNS : ENEMY_SPAWNS;
+  const [sx, sz] = spawns[slot % spawns.length];
+  const pos = { x: sx + (Math.random() - 0.5) * 1.2, z: sz + (Math.random() - 0.5) * 1.2 };
+  pushOut(pos, ENEMY_RADIUS, 0, 2.3);
+  return createBot(team, pos.x, pos.z, name);
+}
+
+function resetGame() {
+  for (const b of [...bots]) removeBot(b);
+  for (const p of [...pickups]) removePickup(p);
+  clearDecals();
+  hud.feed.textContent = '';
+  Object.assign(player, {
+    onGround: true, health: MAX_HEALTH, switchTimer: 0, reloading: 0, reloadPose: 0, dead: false, respawn: 0,
+    fireCooldown: 0, ejectAt: 0, cycle: 10, flashTime: 0, ads: 0, sprintPose: 0, recoil: 0, bob: 0,
+  });
+  refillAmmo();
   equip(2);
   player.switchTo = player.current;
-  player.pos.set(0, 0, 0);
-  player.vel.set(0, 0, 0);
-  Object.assign(game, { score: 0, wave: 0, waveDelay: 1, kills: 0, damageFlash: 0 });
+  placePlayerAtSpawn();
+  viewmodel.visible = true;
+  hud.respawn.classList.add('hidden');
+  for (const p of POINTS) Object.assign(p, { owner: p.start, progress: p.start, allies: 0, hostiles: 0, playerIn: false });
+  Object.assign(game, {
+    score: 0, kills: 0, deaths: 0, damageFlash: 0, tickets: { 1: START_TICKETS, [-1]: START_TICKETS }, bleed: BLEED_INTERVAL, respawns: [],
+  });
+  for (let i = 0; i < ALLY_BOTS; i++) spawnBot(1, BOT_NAMES[1][i], i);
+  for (let i = 0; i < ENEMY_BOTS; i++) spawnBot(-1, BOT_NAMES[-1][i], i);
+  updateHud();
+  updateObjectiveHud();
+}
+
+function respawnPlayer() {
+  Object.assign(player, {
+    dead: false, health: MAX_HEALTH, reloading: 0, switchTimer: 0, ads: 0, recoil: 0, fireCooldown: 0, onGround: true,
+  });
+  refillAmmo();
+  placePlayerAtSpawn();
+  resetParts(arsenal[player.current]);
+  viewmodel.visible = true;
+  hud.respawn.classList.add('hidden');
+  showBanner('Redeployed');
   updateHud();
 }
 
-function startWave() {
-  game.wave++;
-  const count = 3 + game.wave * 2;
-  const candidates = SPAWN_POINTS
-    .filter(([x, z]) => Math.hypot(x - player.pos.x, z - player.pos.z) > 18)
-    .sort(() => Math.random() - 0.5);
-  for (let i = 0; i < count; i++) {
-    const [x, z] = candidates[i % candidates.length];
-    const pos = { x: x + (Math.random() - 0.5) * 3, z: z + (Math.random() - 0.5) * 3 };
-    pushOut(pos, ENEMY_RADIUS, 0, 2.3);
-    createEnemy(pos.x, pos.z, game.wave);
+const ownedBy = (team) => POINTS.filter((p) => p.owner === team).length;
+const pointThreatened = (p, team) => (team === 1 ? p.hostiles : p.allies) > 0 || p.progress * team < 0.999;
+const inZone = (p, x, z, y = 0) => y < 2.6 && (x - p.x) ** 2 + (z - p.z) ** 2 < p.r * p.r;
+
+function checkEnd() {
+  if (game.state !== 'playing') return;
+  if (ownedBy(1) === POINTS.length) {
+    game.score += 1000;
+    endGame(true, 'Every section of the ship is under allied control.');
+  } else if (game.tickets[-1] <= 0) {
+    endGame(true, 'Enemy reinforcements exhausted.');
+  } else if (game.tickets[1] <= 0) {
+    endGame(false, 'Allied reinforcements exhausted.');
   }
-  showBanner(`Wave ${game.wave}`);
+}
+
+function endGame(won, reason) {
+  game.state = 'over';
+  document.exitPointerLock();
+  hud.respawn.classList.add('hidden');
+  if (won) sfx.capture();
+  else sfx.lost();
+  showOverlay(won ? 'Ship captured' : 'Boarding failed', `${reason} ${game.kills} kills - Score ${game.score}`, 'Play again');
+}
+
+function pointChanged(p, before) {
+  const label = `${p.name} (${p.id})`;
+  if (p.owner === 1) {
+    showBanner(`${label} captured`);
+    sfx.capture();
+    if (p.playerIn) game.score += 250;
+  } else if (p.owner === -1) {
+    showBanner(`${label} lost`);
+    sfx.lost();
+  } else {
+    showBanner(before === 1 ? `${label} under attack` : `${label} neutralised`);
+  }
   updateHud();
+  checkEnd();
+}
+
+function updatePoints(dt) {
+  const pulse = 0.55 + 0.45 * Math.sin(performance.now() * 0.012);
+  for (const p of POINTS) {
+    let allies = 0;
+    let hostiles = 0;
+    for (const b of bots) {
+      if (b.dead || !inZone(p, b.group.position.x, b.group.position.z)) continue;
+      if (b.team === 1) allies++;
+      else hostiles++;
+    }
+    p.playerIn = !player.dead && inZone(p, player.pos.x, player.pos.z, player.pos.y);
+    if (p.playerIn) allies++;
+    p.allies = allies;
+    p.hostiles = hostiles;
+    const diff = allies - hostiles;
+    if (diff !== 0) {
+      const n = Math.min(Math.abs(diff), 3);
+      p.progress += Math.sign(diff) * CAPTURE_RATE * (1 + (n - 1) * 0.5) * dt;
+    } else if (!allies) {
+      const gap = p.owner - p.progress;
+      p.progress += Math.sign(gap) * Math.min(Math.abs(gap), 0.05 * dt);
+    }
+    p.progress = Math.max(-1, Math.min(1, p.progress));
+    const before = p.owner;
+    if (p.progress >= 1) p.owner = 1;
+    else if (p.progress <= -1) p.owner = -1;
+    else if (p.owner * p.progress <= 0) p.owner = 0;
+    if (p.owner !== before) {
+      pointChanged(p, before);
+      if (game.state !== 'playing') return;
+    }
+    const k = allies && hostiles ? pulse : 1;
+    for (const m of p.mats) m.color.copy(OWNER_COLORS[p.owner]).multiplyScalar(k);
+  }
+}
+
+// Each section held over the enemy drains their reinforcements.
+function updateBleed(dt) {
+  game.bleed -= dt;
+  if (game.bleed > 0) return;
+  game.bleed = BLEED_INTERVAL;
+  const diff = ownedBy(1) - ownedBy(-1);
+  if (diff > 0) game.tickets[-1] = Math.max(0, game.tickets[-1] - diff);
+  if (diff < 0) game.tickets[1] = Math.max(0, game.tickets[1] + diff);
+  if (diff) checkEnd();
+}
+
+function updateRespawns(dt) {
+  for (let i = game.respawns.length - 1; i >= 0; i--) {
+    const r = game.respawns[i];
+    r.t -= dt;
+    if (r.t > 0) continue;
+    game.respawns.splice(i, 1);
+    if (game.tickets[r.team] > 0) spawnBot(r.team, r.name, Math.floor(Math.random() * 8));
+  }
 }
 
 // ---------- HUD ----------
 const $ = (id) => document.getElementById(id);
 const hud = {
-  score: $('score'), wave: $('wave'), enemies: $('enemies'),
+  score: $('score'), kills: $('kills'), allies: $('allies'), hostiles: $('hostiles'),
   healthFill: $('health-fill'), healthText: $('health-text'),
   mag: $('mag'), reserve: $('reserve'), reloadHint: $('reload-hint'),
   weaponName: $('weapon-name'), slots: $('slots'), scope: $('scope'), crosshair: $('crosshair'),
   hitmarker: $('hitmarker'), damage: $('damage'), banner: $('banner'),
   overlay: $('overlay'), title: $('title'), subtitle: $('subtitle'), play: $('play'),
+  ticketsAlly: $('tickets-ally'), ticketsEnemy: $('tickets-enemy'), points: $('points'), objStatus: $('obj-status'),
+  markers: $('markers'), feed: $('feed'), respawn: $('respawn'),
 };
+
+const ownerClass = (o) => (o > 0 ? 'ally' : o < 0 ? 'enemy' : 'neutral');
+const pointEls = POINTS.map((p) => {
+  const el = document.createElement('div');
+  el.innerHTML = `<div class="fill"></div><span>${p.id}</span>`;
+  hud.points.appendChild(el);
+  return { el, fill: el.firstChild };
+});
+const markerEls = POINTS.map((p) => {
+  const el = document.createElement('div');
+  el.innerHTML = `<b>${p.id}</b><small></small>`;
+  hud.markers.appendChild(el);
+  return { el, dist: el.lastChild };
+});
+
+function updateObjectiveHud() {
+  POINTS.forEach((p, i) => {
+    const { el, fill } = pointEls[i];
+    const cls = `point ${ownerClass(p.owner)}${p.allies && p.hostiles ? ' contested' : ''}${p.playerIn ? ' here' : ''}`;
+    if (el.className !== cls) el.className = cls;
+    fill.style.height = `${(Math.abs(p.progress) * 100).toFixed(1)}%`;
+    fill.className = `fill ${p.progress >= 0 ? 'ally' : 'enemy'}`;
+  });
+  hud.ticketsAlly.textContent = game.tickets[1];
+  hud.ticketsEnemy.textContent = game.tickets[-1];
+  const here = POINTS.find((p) => p.playerIn);
+  let status;
+  if (here) {
+    if (here.hostiles) status = `${here.name} contested`;
+    else if (here.progress < 1) status = `Capturing ${here.name} ${Math.round(Math.max(0, here.progress) * 100)}%`;
+    else status = `Holding ${here.name}`;
+  } else {
+    status = `Sections held ${ownedBy(1)}/${POINTS.length}`;
+  }
+  if (hud.objStatus.textContent !== status) hud.objStatus.textContent = status;
+}
+
+const markerPos = new THREE.Vector3();
+function updateMarkers() {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  camera.updateMatrixWorld();
+  POINTS.forEach((p, i) => {
+    const m = markerEls[i];
+    markerPos.set(p.x, 3.2, p.z).project(camera);
+    let x = (markerPos.x * 0.5 + 0.5) * W;
+    let y = (-markerPos.y * 0.5 + 0.5) * H;
+    if (markerPos.z > 1) {
+      x = x < W / 2 ? W - 40 : 40;
+      y = H / 2;
+    }
+    x = Math.max(40, Math.min(W - 40, x));
+    y = Math.max(110, Math.min(H - 120, y));
+    m.el.style.transform = `translate(${x.toFixed(0)}px, ${y.toFixed(0)}px)`;
+    const cls = `marker ${ownerClass(p.owner)}${p.allies && p.hostiles ? ' contested' : ''}`;
+    if (m.el.className !== cls) m.el.className = cls;
+    m.dist.textContent = `${Math.round(Math.hypot(p.x - player.pos.x, p.z - player.pos.z))}m`;
+  });
+}
+
+function feed(killer, victim, killerTeam, victimTeam) {
+  const el = document.createElement('div');
+  const tag = (name, team) => `<span class="${team === 1 ? 'ally' : 'enemy'}">${name}</span>`;
+  el.innerHTML = `${tag(killer, killerTeam)} &#9656; ${tag(victim, victimTeam)}`;
+  hud.feed.prepend(el);
+  while (hud.feed.children.length > 5) hud.feed.lastChild.remove();
+  setTimeout(() => el.remove(), 5000);
+}
+
+function updateCounts() {
+  const allies = String(bots.filter((b) => b.team === 1 && !b.dead).length + (player.dead ? 0 : 1));
+  const hostiles = String(bots.filter((b) => b.team === -1 && !b.dead).length);
+  if (hud.allies.textContent !== allies) hud.allies.textContent = allies;
+  if (hud.hostiles.textContent !== hostiles) hud.hostiles.textContent = hostiles;
+}
 
 function updateHud() {
   hud.score.textContent = game.score;
-  hud.wave.textContent = game.wave;
-  hud.enemies.textContent = enemies.filter((e) => !e.dead).length;
+  hud.kills.textContent = game.kills;
+  updateCounts();
   const hp = Math.max(0, Math.ceil(player.health));
   hud.healthFill.style.width = `${(hp / MAX_HEALTH) * 100}%`;
   hud.healthFill.style.background = hp > 50 ? '#2ee86b' : hp > 25 ? '#ffb627' : '#ff3b3b';
@@ -1731,7 +2189,7 @@ document.addEventListener('pointerlockchange', () => {
     for (const k in keys) keys[k] = false;
     if (game.state === 'playing') {
       game.state = 'paused';
-      showOverlay('Paused', `Wave ${game.wave} - Score ${game.score}`, 'Click to resume');
+      showOverlay('Paused', `${game.kills} kills - Score ${game.score} - Sections held ${ownedBy(1)}/${POINTS.length}`, 'Click to resume');
     }
   }
 });
@@ -1790,7 +2248,7 @@ document.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
 // ---------- Player actions ----------
 function switchWeapon(index) {
-  if (index === player.switchTo) return;
+  if (player.dead || index === player.switchTo) return;
   player.switchTo = index;
   player.reloading = 0;
   if (player.switchTimer <= 0 || player.switchTimer < SWITCH_TIME / 2) player.switchTimer = SWITCH_TIME;
@@ -1800,7 +2258,7 @@ function switchWeapon(index) {
 
 function startReload() {
   const w = arsenal[player.current];
-  if (player.switchTimer > 0 || player.reloading > 0 || w.mag >= w.def.magSize || w.reserve === 0) return;
+  if (player.dead || player.switchTimer > 0 || player.reloading > 0 || w.mag >= w.def.magSize || w.reserve === 0) return;
   player.reloading = player.reloadTotal = w.def.reloadTime + (w.def.perShell ? 0.2 : 0);
   if (!w.def.perShell) {
     sfx.magOut();
@@ -1861,6 +2319,7 @@ function shoot() {
   flash.visible = true;
   flash.rotation.z = Math.random() * Math.PI;
   flashLight.intensity = 3;
+  if (w.model.glow) w.model.glow.emissiveIntensity = w.model.glowBase * 3;
   worldFlash.intensity = 4 + def.flash * 20;
 
   camera.updateMatrixWorld();
@@ -1875,7 +2334,7 @@ function shoot() {
     + (player.onGround ? 0 : 0.025)
     + (def.pellets === 1 ? player.recoil * 0.0025 : 0);
 
-  const targets = [...worldMeshes, ...enemyShootables()];
+  const targets = [...worldMeshes, ...hostileShootables()];
   const damage = new Map();
   for (let i = 0; i < def.pellets; i++) {
     camera.getWorldDirection(forward);
@@ -1888,10 +2347,10 @@ function shoot() {
     raycaster.set(camera.position, forward);
     const hits = raycaster.intersectObjects(targets, false);
     const end = hits.length ? hits[0].point : camera.position.clone().addScaledVector(forward, 80);
-    if (i < 4) spawnTracer(muzzleWorld, end, 0xffd27a);
+    if (i < 4) spawnBolt(muzzleWorld, end, def.color, def.id === 'rail' ? 0.03 : def.pellets > 1 ? 0.01 : 0.016, def.id === 'rail' ? 0.3 : 0.07);
     if (!hits.length) continue;
     const hit = hits[0];
-    const enemy = hit.object.userData.enemy;
+    const enemy = hit.object.userData.bot;
     if (enemy) {
       const headshot = !!hit.object.userData.head;
       let dmg = headshot ? def.headDamage : def.damage;
@@ -1900,48 +2359,84 @@ function shoot() {
       entry.dmg += dmg;
       entry.headshot = entry.headshot || headshot;
       damage.set(enemy, entry);
-      spawnImpact(hit.point, 0x8a0a0a, forward.clone().negate());
+      spawnImpact(hit.point, 0x404650, forward.clone().negate(), true, def.color);
     } else {
       const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
-      spawnImpact(hit.point, 0xcdbfa6, normal, true);
+      spawnImpact(hit.point, 0x9aa3ae, normal, true, def.color);
       spawnDecal(hit);
     }
   }
-  for (const [enemy, { dmg, headshot }] of damage) damageEnemy(enemy, dmg, headshot);
+  for (const [enemy, { dmg, headshot }] of damage) damageBot(enemy, dmg, headshot, player);
   updateHud();
 }
 
-function damageEnemy(enemy, amount, headshot) {
-  enemy.health -= amount;
-  enemy.flash = 0.1;
-  if (enemy.health <= 0) {
-    enemy.dead = true;
-    enemy.deathTime = 0;
-    game.kills++;
-    game.score += headshot ? 150 : 100;
-    sfx.kill();
-    showHitmarker(true);
-    const roll = Math.random();
-    if (roll < 0.25) spawnPickup(enemy.group.position.x, enemy.group.position.z, 'health');
-    else if (roll < 0.6) spawnPickup(enemy.group.position.x, enemy.group.position.z, 'ammo');
-  } else {
+function damageBot(bot, amount, headshot, attacker) {
+  if (bot.dead) return;
+  bot.health -= amount;
+  bot.flash = 0.1;
+  const byPlayer = attacker === player;
+  if (bot.health <= 0) {
+    bot.dead = true;
+    bot.deathTime = 0;
+    bot.target = null;
+    game.tickets[bot.team] = Math.max(0, game.tickets[bot.team] - 1);
+    game.respawns.push({ team: bot.team, name: bot.name, t: RESPAWN_TIME });
+    feed(byPlayer ? 'You' : attacker.name, bot.name, byPlayer ? 1 : attacker.team, bot.team);
+    if (bot.team === -1) {
+      const roll = Math.random();
+      if (roll < 0.25) spawnPickup(bot.group.position.x, bot.group.position.z, 'health');
+      else if (roll < 0.6) spawnPickup(bot.group.position.x, bot.group.position.z, 'ammo');
+    }
+    if (byPlayer) {
+      game.kills++;
+      game.score += headshot ? 150 : 100;
+      sfx.kill();
+      showHitmarker(true);
+    }
+    updateHud();
+    checkEnd();
+    return;
+  }
+  if (byPlayer) {
     sfx.hit();
     showHitmarker(false);
   }
-  updateHud();
 }
 
-function damagePlayer(amount) {
+function damagePlayer(amount, attacker) {
+  if (player.dead) return;
   player.health -= amount;
   game.damageFlash = Math.min(1, game.damageFlash + 0.5);
   sfx.hurt();
   if (player.health <= 0) {
     player.health = 0;
-    game.state = 'over';
-    document.exitPointerLock();
-    showOverlay('You died', `Wave ${game.wave} - ${game.kills} kills - Score ${game.score}`, 'Play again');
+    player.dead = true;
+    player.respawn = RESPAWN_TIME;
+    game.deaths++;
+    game.tickets[1] = Math.max(0, game.tickets[1] - 1);
+    feed(attacker.name, 'You', attacker.team, 1);
+    mouseDown = false;
+    aimDown = false;
+    Object.assign(player, { reloading: 0, ads: 0, switchTimer: 0 });
+    player.switchTo = player.current;
+    viewmodel.visible = false;
+    hud.scope.classList.remove('show');
+    camera.fov = BASE_FOV;
+    camera.updateProjectionMatrix();
+    hud.respawn.classList.remove('hidden');
+    updateHud();
+    checkEnd();
+    return;
   }
   updateHud();
+}
+
+function updateDeadPlayer(dt) {
+  player.respawn -= dt;
+  hud.respawn.textContent = `You were killed - redeploying in ${Math.max(0, Math.ceil(player.respawn))}`;
+  camera.position.y = Math.max(player.pos.y + 0.4, camera.position.y - dt * 2);
+  camera.rotation.z = Math.min(0.5, camera.rotation.z + dt);
+  if (player.respawn <= 0) respawnPlayer();
 }
 
 // ---------- Update ----------
@@ -2032,7 +2527,7 @@ function updateWeapon(dt, horiz, sprinting) {
 
   camera.fov = BASE_FOV + (def.adsFov - BASE_FOV) * ads;
   camera.updateProjectionMatrix();
-  const scoped = def.id === 'm24' && ads > 0.92;
+  const scoped = !!w.model.scope && ads > 0.92;
   hud.scope.classList.toggle('show', scoped);
   hud.crosshair.style.opacity = ads > 0.4 ? 0 : 1;
   viewmodel.visible = !scoped;
@@ -2101,6 +2596,10 @@ function updateWeapon(dt, horiz, sprinting) {
     }
   }
 
+  if (w.model.glow) {
+    const glowTarget = w.model.glowBase * (w.mag > 0 ? 1 : 0.2);
+    w.model.glow.emissiveIntensity += (glowTarget - w.model.glow.emissiveIntensity) * Math.min(1, dt * 10);
+  }
   player.flashTime -= dt;
   if (player.flashTime <= 0) flash.visible = false;
   flashLight.intensity = Math.max(0, flashLight.intensity - dt * 60);
@@ -2110,115 +2609,201 @@ function updateWeapon(dt, horiz, sprinting) {
 
 const eyeFrom = new THREE.Vector3();
 const eyeTo = new THREE.Vector3();
+const BOT_SIGHT = 42;
 
-function updateEnemies(dt) {
-  const target = player.pos;
-  for (let i = enemies.length - 1; i >= 0; i--) {
-    const e = enemies[i];
-    const g = e.group;
+function aimPoint(target, out) {
+  if (target === player) return out.set(player.pos.x, player.pos.y + PLAYER_HEIGHT - 0.35, player.pos.z);
+  return out.set(target.group.position.x, 1.35, target.group.position.z);
+}
 
-    if (e.dead) {
-      e.deathTime += dt;
-      g.rotation.x = Math.min(Math.PI / 2, e.deathTime * 5);
-      g.position.y = -Math.max(0, e.deathTime - 1) * 1.5;
-      if (e.deathTime > 2.2) removeEnemy(e);
+const targetAlive = (t) => t && (t === player ? !player.dead : !t.dead);
+
+// Closest visible opponent, or null.
+function findTarget(bot) {
+  const gp = bot.group.position;
+  eyeFrom.set(gp.x, ENEMY_EYE, gp.z);
+  let best = null;
+  let bestD = BOT_SIGHT;
+  const consider = (t, x, z) => {
+    const d = Math.hypot(x - gp.x, z - gp.z);
+    if (d >= bestD || segmentBlocked(eyeFrom, aimPoint(t, eyeTo))) return;
+    best = t;
+    bestD = d;
+  };
+  for (const o of bots) {
+    if (o.team !== bot.team && !o.dead) consider(o, o.group.position.x, o.group.position.z);
+  }
+  if (bot.team === -1 && !player.dead) consider(player, player.pos.x, player.pos.z);
+  return best;
+}
+
+// Head for the nearest section that still needs taking or defending.
+function chooseGoal(bot) {
+  const gp = bot.group.position;
+  let best = POINTS[0];
+  let bestScore = Infinity;
+  for (const p of POINTS) {
+    let score = Math.hypot(p.x - gp.x, p.z - gp.z) + Math.random() * 14;
+    if (p.owner === bot.team) score += pointThreatened(p, bot.team) ? 4 : 45;
+    if (score < bestScore) {
+      best = p;
+      bestScore = score;
+    }
+  }
+  const a = Math.random() * Math.PI * 2;
+  const r = best.inner + 0.6 + Math.random() * (best.r - best.inner - 1.2);
+  const goal = { x: best.x + Math.cos(a) * r, z: best.z + Math.sin(a) * r };
+  pushOut(goal, ENEMY_RADIUS + 0.3, 0, 2.3);
+  Object.assign(bot, { goal, goalPoint: best, goalTimer: 6 + Math.random() * 6, path: null, repath: 0 });
+}
+
+function updateBots(dt) {
+  for (let i = bots.length - 1; i >= 0; i--) {
+    const bot = bots[i];
+    const g = bot.group;
+    const gp = g.position;
+
+    if (bot.dead) {
+      bot.deathTime += dt;
+      g.rotation.x = Math.min(Math.PI / 2, bot.deathTime * 5);
+      gp.y = -Math.max(0, bot.deathTime - 1) * 1.5;
+      if (bot.deathTime > 2.2) removeBot(bot);
       continue;
     }
 
-    const dx = target.x - g.position.x;
-    const dz = target.z - g.position.z;
-    const dist = Math.hypot(dx, dz);
-    const nx = dx / (dist || 1);
-    const nz = dz / (dist || 1);
-    g.rotation.y = Math.atan2(-dx, -dz);
+    bot.scan -= dt;
+    if (bot.scan <= 0) {
+      bot.scan = 0.25 + Math.random() * 0.15;
+      bot.target = findTarget(bot);
+    }
+    if (!targetAlive(bot.target)) bot.target = null;
+    const target = bot.target;
 
-    eyeFrom.set(g.position.x, ENEMY_EYE, g.position.z);
-    eyeTo.set(player.pos.x, player.pos.y + PLAYER_HEIGHT - 0.1, player.pos.z);
-    const canSee = dist < 45 && !lineBlocked(eyeFrom, eyeTo);
+    bot.goalTimer -= dt;
+    if (!bot.goal || bot.goalTimer <= 0) chooseGoal(bot);
+    else if (bot.goalPoint.owner === bot.team && !pointThreatened(bot.goalPoint, bot.team) && bot.goalTimer > 2) bot.goalTimer = 2;
 
-    // Movement: approach, keep some distance when the player is visible, and strafe.
-    e.strafeTimer -= dt;
-    if (e.strafeTimer <= 0) {
-      e.strafe *= -1;
-      e.strafeTimer = 1 + Math.random() * 2.5;
+    let tdx = 0;
+    let tdz = 0;
+    let tdist = Infinity;
+    if (target) {
+      aimPoint(target, eyeTo);
+      tdx = eyeTo.x - gp.x;
+      tdz = eyeTo.z - gp.z;
+      tdist = Math.hypot(tdx, tdz) || 0.01;
+    }
+
+    bot.strafeTimer -= dt;
+    if (bot.strafeTimer <= 0) {
+      bot.strafe *= -1;
+      bot.strafeTimer = 1 + Math.random() * 2.5;
     }
     let mx = 0;
     let mz = 0;
-    const preferred = canSee ? 9 : 2;
-    if (dist > preferred) {
-      e.repath -= dt;
-      if (e.repath <= 0 || !e.path) {
-        e.path = findPath(g.position.x, g.position.z, target.x, target.z);
-        e.repath = 0.4 + Math.random() * 0.4;
+    const gx = bot.goal.x - gp.x;
+    const gz = bot.goal.z - gp.z;
+    const goalDist = Math.hypot(gx, gz);
+    const fighting = target && tdist < 11;
+    if (fighting) {
+      mx += (-tdz / tdist) * bot.strafe * 0.8;
+      mz += (tdx / tdist) * bot.strafe * 0.8;
+      if (tdist < 5) {
+        mx -= tdx / tdist;
+        mz -= tdz / tdist;
       }
-      while (e.path && e.path.length > 1 && Math.hypot(e.path[0].x - g.position.x, e.path[0].z - g.position.z) < 0.5) e.path.shift();
-      if (e.path && e.path.length && !(canSee && dist < 4)) {
-        const wx = e.path[0].x - g.position.x;
-        const wz = e.path[0].z - g.position.z;
-        const wl = Math.hypot(wx, wz) || 1;
-        mx += wx / wl;
-        mz += wz / wl;
-      } else {
-        mx += nx;
-        mz += nz;
-      }
-    } else if (dist < preferred - 3) {
-      mx -= nx;
-      mz -= nz;
     }
-    if (canSee) { mx += -nz * e.strafe * 0.6; mz += nx * e.strafe * 0.6; }
-    for (const o of enemies) {
-      if (o === e || o.dead) continue;
-      const ox = g.position.x - o.group.position.x;
-      const oz = g.position.z - o.group.position.z;
+    const pathWeight = fighting ? (goalDist > 3 ? 0.5 : 0) : goalDist > 0.8 ? 1 : 0;
+    if (pathWeight > 0) {
+      bot.repath -= dt;
+      if (bot.repath <= 0 || !bot.path) {
+        bot.path = findPath(gp.x, gp.z, bot.goal.x, bot.goal.z);
+        bot.repath = 0.9 + Math.random() * 0.5;
+      }
+      while (bot.path && bot.path.length > 1 && Math.hypot(bot.path[0].x - gp.x, bot.path[0].z - gp.z) < 0.6) bot.path.shift();
+      let wx = gx;
+      let wz = gz;
+      if (bot.path && bot.path.length && goalDist > 1.5) {
+        wx = bot.path[0].x - gp.x;
+        wz = bot.path[0].z - gp.z;
+      }
+      const wl = Math.hypot(wx, wz) || 1;
+      mx += (wx / wl) * pathWeight;
+      mz += (wz / wl) * pathWeight;
+    } else if (target && !fighting) {
+      mx += (-tdz / tdist) * bot.strafe * 0.4;
+      mz += (tdx / tdist) * bot.strafe * 0.4;
+    }
+    for (const o of bots) {
+      if (o === bot || o.dead) continue;
+      const ox = gp.x - o.group.position.x;
+      const oz = gp.z - o.group.position.z;
       const od = Math.hypot(ox, oz);
-      if (od < 1.6 && od > 0.001) { mx += (ox / od) * (1.6 - od); mz += (oz / od) * (1.6 - od); }
+      if (od < 1.3 && od > 0.001) {
+        mx += (ox / od) * (1.3 - od) * 1.5;
+        mz += (oz / od) * (1.3 - od) * 1.5;
+      }
+    }
+    if (!player.dead) {
+      const ox = gp.x - player.pos.x;
+      const oz = gp.z - player.pos.z;
+      const od = Math.hypot(ox, oz);
+      if (od < 1.2 && od > 0.001) {
+        mx += (ox / od) * (1.2 - od) * 2;
+        mz += (oz / od) * (1.2 - od) * 2;
+      }
     }
     const ml = Math.hypot(mx, mz);
-    if (ml > 0.01) {
-      g.position.x += (mx / ml) * e.speed * dt;
-      g.position.z += (mz / ml) * e.speed * dt;
-      e.walk += dt * e.speed * 3;
+    const moving = ml > 0.05;
+    if (moving) {
+      const sp = bot.speed * Math.min(1, ml) * (fighting ? 0.75 : 1);
+      gp.x += (mx / ml) * sp * dt;
+      gp.z += (mz / ml) * sp * dt;
+      bot.walk += dt * sp * 3;
     }
-    pushOut(g.position, ENEMY_RADIUS, 0, 2.3);
-    g.position.x = Math.max(-ARENA + 1, Math.min(ARENA - 1, g.position.x));
-    g.position.z = Math.max(-ARENA + 1, Math.min(ARENA - 1, g.position.z));
+    pushOut(gp, ENEMY_RADIUS, 0, 2.3);
+    gp.x = Math.max(-ARENA + 1, Math.min(ARENA - 1, gp.x));
+    gp.z = Math.max(-ARENA + 1, Math.min(ARENA - 1, gp.z));
 
-    const swing = Math.sin(e.walk);
-    e.legL.hip.rotation.x = swing * 0.55;
-    e.legR.hip.rotation.x = -swing * 0.55;
-    e.legL.knee.rotation.x = Math.max(0, -Math.cos(e.walk)) * 0.8;
-    e.legR.knee.rotation.x = Math.max(0, Math.cos(e.walk)) * 0.8;
+    let want = bot.heading;
+    if (target) want = Math.atan2(-tdx, -tdz);
+    else if (moving) want = Math.atan2(-mx, -mz);
+    let turn = want - bot.heading;
+    turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+    bot.heading += turn * Math.min(1, dt * 8);
+    g.rotation.y = bot.heading;
 
-    e.flash = Math.max(0, e.flash - dt);
-    for (const m of Object.values(e.mats)) {
-      m.emissive.setHex(e.flash > 0 ? 0xff5040 : 0x000000);
+    bot.stride += ((moving ? 1 : 0) - bot.stride) * Math.min(1, dt * 8);
+    const swing = Math.sin(bot.walk) * bot.stride;
+    bot.legL.hip.rotation.x = swing * 0.55;
+    bot.legR.hip.rotation.x = -swing * 0.55;
+    bot.legL.knee.rotation.x = Math.max(0, -Math.cos(bot.walk)) * 0.8 * bot.stride;
+    bot.legR.knee.rotation.x = Math.max(0, Math.cos(bot.walk)) * 0.8 * bot.stride;
+
+    bot.flash = Math.max(0, bot.flash - dt);
+    for (const m of Object.values(bot.mats)) {
+      m.emissive.setHex(bot.flash > 0 ? 0xff5040 : 0x000000);
       m.emissiveIntensity = 0.6;
     }
 
-    // Shooting
-    e.fireCooldown -= dt;
-    if (canSee && e.fireCooldown <= 0) {
-      e.fireCooldown = e.fireRate * (0.7 + Math.random() * 0.6);
-      const playerSpeed = Math.hypot(player.vel.x, player.vel.z);
-      const chance = e.accuracy * Math.max(0.2, 1 - dist / 40) * (playerSpeed > 7 ? 0.6 : playerSpeed > 1 ? 0.8 : 1);
+    bot.fireCooldown -= dt;
+    if (target && bot.fireCooldown <= 0 && Math.abs(turn) < 0.5) {
+      bot.fireCooldown = bot.fireRate * (0.6 + Math.random() * 0.8);
+      let chance = bot.accuracy * Math.max(0.25, 1 - tdist / 45);
+      if (target === player) {
+        const ps = Math.hypot(player.vel.x, player.vel.z);
+        chance *= ps > 7 ? 0.6 : ps > 1 ? 0.8 : 1;
+      }
       const hit = Math.random() < chance;
+      g.updateMatrixWorld();
       const muzzle = tmpV.copy(ENEMY_MUZZLE).applyMatrix4(g.matrixWorld).clone();
       const aim = eyeTo.clone();
-      aim.y -= 0.3;
-      if (!hit) aim.add(tmpV2.set((Math.random() - 0.5) * 2.5, (Math.random() - 0.5) * 1.5, (Math.random() - 0.5) * 2.5));
-      spawnTracer(muzzle, aim, 0xffb347);
-      sfx.enemyShot(dist);
-      if (hit) damagePlayer(6 + Math.min(game.wave, 8));
-      if (game.state !== 'playing') return;
-    }
-
-    // Melee if right on top of the player
-    if (dist < 1.1 && Math.abs(player.pos.y) < 1) {
-      e.meleeCooldown = (e.meleeCooldown || 0) - dt;
-      if (e.meleeCooldown <= 0) {
-        e.meleeCooldown = 0.8;
-        damagePlayer(10);
+      if (!hit) aim.add(tmpV2.set((Math.random() - 0.5) * 2.4, (Math.random() - 0.5) * 1.4, (Math.random() - 0.5) * 2.4));
+      spawnBolt(muzzle, aim, TEAM_STYLE[bot.team].bolt, 0.016, 0.07);
+      spawnSprite(muzzle, TEAM_STYLE[bot.team].bolt, 0.25, 0.05, null, { mat: { blending: THREE.AdditiveBlending } });
+      sfx.botShot(Math.hypot(gp.x - player.pos.x, gp.z - player.pos.z), bot.team);
+      if (hit) {
+        if (target === player) damagePlayer(7, bot);
+        else damageBot(target, 12 + Math.random() * 4, false, bot);
         if (game.state !== 'playing') return;
       }
     }
@@ -2256,27 +2841,21 @@ function updatePickups(dt) {
 }
 
 function update(dt) {
-  updatePlayer(dt);
+  if (player.dead) updateDeadPlayer(dt);
+  else updatePlayer(dt);
   if (game.state !== 'playing') return;
-  updateEnemies(dt);
+  updateBots(dt);
   if (game.state !== 'playing') return;
-  updatePickups(dt);
-
-  const alive = enemies.filter((e) => !e.dead).length;
-  if (alive !== Number(hud.enemies.textContent)) updateHud();
-  if (alive === 0 && enemies.length === 0) {
-    if (game.waveDelay <= 0) {
-      game.waveDelay = game.wave === 0 ? 1 : 3;
-      if (game.wave > 0) {
-        showBanner(`Wave ${game.wave} cleared`);
-        for (const w of arsenal) w.reserve += w.def.magSize;
-        player.health = Math.min(MAX_HEALTH, player.health + 20);
-        updateHud();
-      }
-    }
-    game.waveDelay -= dt;
-    if (game.waveDelay <= 0) startWave();
-  }
+  updatePoints(dt);
+  if (game.state !== 'playing') return;
+  updateBleed(dt);
+  if (game.state !== 'playing') return;
+  updateRespawns(dt);
+  if (!player.dead) updatePickups(dt);
+  for (const s of spinners) s.mesh.rotation.y += s.speed * dt;
+  updateCounts();
+  updateObjectiveHud();
+  updateMarkers();
 }
 
 // ---------- Main loop ----------
@@ -2307,6 +2886,6 @@ function frame() {
 }
 
 resetGame();
-camera.position.set(0, PLAYER_HEIGHT, 0);
+camera.position.set(player.pos.x, PLAYER_HEIGHT, player.pos.z);
 camera.rotation.set(0, 0, 0);
 frame();

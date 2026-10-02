@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>3D FPS</title>
+  <title>Boarding Party - 3D FPS</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -13,10 +13,19 @@
     <div id="hitmarker"></div>
     <div id="damage"></div>
     <div id="banner"></div>
+    <div id="markers"></div>
+    <div id="respawn" class="hidden"></div>
+    <div id="objective">
+      <div class="tickets ally" title="Allied reinforcements"><span id="tickets-ally">150</span></div>
+      <div id="points"></div>
+      <div class="tickets enemy" title="Enemy reinforcements"><span id="tickets-enemy">150</span></div>
+      <div id="obj-status"></div>
+    </div>
+    <div id="feed"></div>
     <div id="top-left">
       <div>Score <span id="score">0</span></div>
-      <div>Wave <span id="wave">1</span></div>
-      <div>Enemies <span id="enemies">0</span></div>
+      <div>Kills <span id="kills">0</span></div>
+      <div>Allies <span id="allies" class="ally">0</span> &middot; Hostiles <span id="hostiles" class="enemy">0</span></div>
     </div>
     <div id="bottom-left">
       <div class="label">Health</div>
@@ -26,7 +35,7 @@
     <div id="scope"></div>
     <div id="bottom-right">
       <div id="slots">
-        <span>1 Glock 17</span><span>2 MP5</span><span>3 AK-47</span><span>4 870</span><span>5 M24</span>
+        <span>1 Ion</span><span>2 Pulse</span><span>3 Plasma</span><span>4 Scatter</span><span>5 Rail</span>
       </div>
       <div id="weapon-name"></div>
       <div id="ammo"><span id="mag">30</span> / <span id="reserve">90</span></div>
@@ -36,8 +45,8 @@
 
   <div id="overlay">
     <div id="panel">
-      <h1 id="title">3D FPS</h1>
-      <p id="subtitle">Survive the waves.</p>
+      <h1 id="title">Boarding Party</h1>
+      <p id="subtitle">Board the enemy ship with your squad and capture the Cargo Bay (A), Reactor (B) and Bridge (C).</p>
       <button id="play">Click to play</button>
       <label id="lefty-row"><input type="checkbox" id="lefty"> Left-handed mouse (swaps mouse buttons)</label>
       <table id="controls">

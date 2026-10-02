@@ -1,9 +1,23 @@
 # 3dfps
 vibecoded 3d fps by devin
 
-A wave-based first-person shooter that runs in the browser, built with [Three.js](https://threejs.org/) (loaded from a CDN, no build step).
+**Boarding Party**: a first-person shooter set inside a starship, running in the browser with [Three.js](https://threejs.org/) (loaded from a CDN, no build step).
 
 Play: https://kaiboyjiang.github.io/3dfps/
+
+## Objective
+
+You and five allied bots board the enemy ship from the hangar. Capture its three sections by standing in their rings:
+
+| Point | Section | Starts |
+| --- | --- | --- |
+| A | Cargo Bay | Neutral |
+| B | Reactor | Neutral |
+| C | Bridge | Enemy-held |
+
+A point fills toward whichever team has more people inside; it stalls while contested. Each team has 150 reinforcement tickets: a death costs one, and every section a team holds over the other drains the opposing team's tickets. Bots and the player redeploy 5 seconds after dying (allies at the hangar, enemies behind the bridge).
+
+You win by holding all three sections or emptying the enemy's tickets, and lose if allied tickets run out. Allies path to and defend points, fight hostiles, and can't be hit by your shots. Hostiles contest points and target both you and your allies.
 
 ## Controls
 
@@ -20,21 +34,21 @@ Both layouts are always active. Tick **Left-handed mouse** on the start screen t
 | Reload | R / middle click | U / Enter / middle click |
 | Pause | Esc | Esc / P |
 
-Weapons are procedurally modelled after real firearms, each with its own damage, fire rate, recoil, magazine and reload:
+Five procedurally modelled energy weapons, each with its own damage, fire rate, recoil, cell capacity and recharge:
 
-| Slot | Weapon | Caliber | Notes |
+| Slot | Weapon | Ammo | Notes |
 | --- | --- | --- | --- |
-| 1 | Glock 17 | 9x19mm | Semi-auto pistol, slide locks back on empty |
-| 2 | MP5A2 | 9x19mm | Fast, low-recoil SMG with diopter sight |
-| 3 | AK-47 | 7.62x39mm | Hard-hitting automatic rifle |
-| 4 | Remington 870 | 12 gauge | Pump shotgun, 9 pellets, shell-by-shell reload |
-| 5 | M24 SWS | 7.62x51mm | Bolt-action sniper with 10x scope |
+| 1 | VX-9 Ion Pistol | Ion cell | Accurate semi-auto sidearm |
+| 2 | P-40 Pulse SMG | Pulse cell | Fast, low-recoil automatic |
+| 3 | LR-7 Plasma Rifle | Plasma core | Hard-hitting automatic rifle |
+| 4 | SC-12 Scatter Blaster | Arc charge | 9-bolt spread, pump action, cell-by-cell reload |
+| 5 | RG-2 Rail Gun | Mag slug | Bolt-action precision rifle with a scope |
 
-Headshots deal extra damage. Enemies path around cover, drop health/ammo pickups, and each wave brings more of them.
+Headshots deal extra damage. Hostiles sometimes drop health and plasma-cell pickups.
 
 ## Graphics
 
-Scenes use physically based materials with CC0 texture sets from [Poly Haven](https://polyhaven.com) (`assets/textures`), image-based lighting from a sky dome, soft sun shadows, ACES tone mapping, MSAA, bloom and bullet-hole decals.
+The ship has a hangar with a docked shuttle and a force field open to space, a cargo bay, a reactor room, engineering and a bridge with a view of a planet. It is detailed with bulkhead doors, consoles, screens, conduits, vents and light strips. Rendering uses physically based materials with CC0 texture sets from [Poly Haven](https://polyhaven.com) (`assets/textures`), a procedural nebula and starfield, image-based lighting, soft shadows, ACES tone mapping, MSAA, bloom and impact decals.
 
 ## Run locally
 
