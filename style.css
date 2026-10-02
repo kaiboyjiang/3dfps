@@ -111,6 +111,24 @@ canvas { display: block; }
 #health-text { margin-top: 6px; font-weight: 600; }
 
 #bottom-right { bottom: 16px; right: 16px; text-align: right; }
+#slots { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 8px; font-size: 12px; }
+#slots span { padding: 2px 6px; border-radius: 4px; color: var(--muted); background: rgba(255, 255, 255, 0.04); }
+#slots span.active { color: #1c1f22; background: var(--accent); font-weight: 600; }
+#slots span.empty { text-decoration: line-through; }
+#weapon-name { color: var(--muted); font-size: 13px; letter-spacing: 1px; white-space: pre; }
+
+#crosshair { transition: opacity 0.1s; }
+
+#scope {
+  position: absolute;
+  inset: 0;
+  display: none;
+  background:
+    linear-gradient(rgba(10, 10, 10, 0.85), rgba(10, 10, 10, 0.85)) center / 100% 1px no-repeat,
+    linear-gradient(rgba(10, 10, 10, 0.85), rgba(10, 10, 10, 0.85)) center / 1px 100% no-repeat,
+    radial-gradient(circle at center, transparent 0, transparent 34vmin, #0b0c0d 34.4vmin);
+}
+#scope.show { display: block; }
 #ammo { font-size: 26px; font-weight: 600; }
 #reserve { color: var(--muted); font-size: 18px; }
 #reload-hint { color: var(--accent); font-size: 13px; min-height: 16px; }
