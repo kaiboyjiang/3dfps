@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D FPS</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="hud">
+    <div id="crosshair"></div>
+    <div id="hitmarker"></div>
+    <div id="damage"></div>
+    <div id="banner"></div>
+    <div id="top-left">
+      <div>Score <span id="score">0</span></div>
+      <div>Wave <span id="wave">1</span></div>
+      <div>Enemies <span id="enemies">0</span></div>
+    </div>
+    <div id="bottom-left">
+      <div class="label">Health</div>
+      <div id="health-bar"><div id="health-fill"></div></div>
+      <div id="health-text">100</div>
+    </div>
+    <div id="bottom-right">
+      <div id="ammo"><span id="mag">30</span> / <span id="reserve">90</span></div>
+      <div id="reload-hint"></div>
+    </div>
+  </div>
+
+  <div id="overlay">
+    <div id="panel">
+      <h1 id="title">3D FPS</h1>
+      <p id="subtitle">Survive the waves.</p>
+      <button id="play">Click to play</button>
+      <table id="controls">
+        <tr><td>WASD</td><td>Move</td></tr>
+        <tr><td>Mouse</td><td>Aim</td></tr>
+        <tr><td>Left click</td><td>Shoot (hold for auto)</td></tr>
+        <tr><td>Space</td><td>Jump</td></tr>
+        <tr><td>Shift</td><td>Sprint</td></tr>
+        <tr><td>R</td><td>Reload</td></tr>
+        <tr><td>Esc</td><td>Pause</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
