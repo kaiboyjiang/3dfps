@@ -1,9 +1,11 @@
 :root {
-  --text: #d8dadc;
-  --muted: #8d9296;
-  --accent: #b9a77a;
-  --danger: #b0605a;
-  --panel: rgba(28, 31, 34, 0.82);
+  --text: #ffffff;
+  --muted: #a9c4e0;
+  --accent: #ffb627;
+  --danger: #ff3b3b;
+  --good: #2ee86b;
+  --blue: #3d9bff;
+  --panel: rgba(8, 16, 30, 0.62);
 }
 
 * { box-sizing: border-box; }
@@ -12,7 +14,7 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: #1c1f22;
+  background: #0b1626;
   color: var(--text);
   font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   user-select: none;
@@ -37,7 +39,8 @@ canvas { display: block; }
 #crosshair::before, #crosshair::after {
   content: "";
   position: absolute;
-  background: rgba(230, 232, 234, 0.85);
+  background: #ffffff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
 }
 #crosshair::before { left: 9px; top: 0; width: 2px; height: 20px; }
 #crosshair::after { top: 9px; left: 0; width: 20px; height: 2px; }
@@ -65,7 +68,7 @@ canvas { display: block; }
 #damage {
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at center, transparent 45%, rgba(150, 50, 45, 0.75) 100%);
+  background: radial-gradient(ellipse at center, transparent 45%, rgba(220, 20, 20, 0.75) 100%);
   opacity: 0;
 }
 
@@ -88,8 +91,11 @@ canvas { display: block; }
   position: absolute;
   padding: 12px 16px;
   background: var(--panel);
-  border-radius: 6px;
+  border: 1px solid rgba(120, 180, 255, 0.25);
+  border-radius: 8px;
   font-size: 16px;
+  backdrop-filter: blur(6px);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 #top-left { top: 16px; left: 16px; line-height: 1.6; }
 #top-left span { color: var(--accent); font-weight: 600; }
@@ -98,22 +104,23 @@ canvas { display: block; }
 .label { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
 #health-bar {
   height: 10px;
-  background: #3a3e42;
+  background: rgba(255, 255, 255, 0.15);
   border-radius: 5px;
   overflow: hidden;
 }
 #health-fill {
   height: 100%;
   width: 100%;
-  background: #7f9c7a;
+  background: var(--good);
+  box-shadow: 0 0 8px rgba(46, 232, 107, 0.6);
   transition: width 0.15s, background 0.3s;
 }
 #health-text { margin-top: 6px; font-weight: 600; }
 
 #bottom-right { bottom: 16px; right: 16px; text-align: right; }
 #slots { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 8px; font-size: 12px; }
-#slots span { padding: 2px 6px; border-radius: 4px; color: var(--muted); background: rgba(255, 255, 255, 0.04); }
-#slots span.active { color: #1c1f22; background: var(--accent); font-weight: 600; }
+#slots span { padding: 2px 6px; border-radius: 4px; color: var(--muted); background: rgba(61, 155, 255, 0.15); }
+#slots span.active { color: #10161f; background: var(--accent); font-weight: 600; }
 #slots span.empty { text-decoration: line-through; }
 #weapon-name { color: var(--muted); font-size: 13px; letter-spacing: 1px; white-space: pre; }
 
@@ -139,18 +146,20 @@ canvas { display: block; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(20, 22, 24, 0.6);
+  background: radial-gradient(ellipse at center, rgba(10, 30, 60, 0.35), rgba(5, 10, 20, 0.75));
 }
 #overlay.hidden { display: none; }
 
 #panel {
   background: var(--panel);
   padding: 32px 44px;
-  border-radius: 10px;
+  border: 1px solid rgba(120, 180, 255, 0.3);
+  border-radius: 12px;
   text-align: center;
   min-width: 340px;
+  backdrop-filter: blur(8px);
 }
-#panel h1 { margin: 0 0 6px; letter-spacing: 3px; }
+#panel h1 { margin: 0 0 6px; letter-spacing: 3px; color: var(--accent); text-shadow: 0 0 18px rgba(255, 182, 39, 0.5); }
 #subtitle { color: var(--muted); margin: 0 0 20px; }
 
 #play {
@@ -159,8 +168,8 @@ canvas { display: block; }
   padding: 10px 28px;
   border: none;
   border-radius: 6px;
-  background: var(--accent);
-  color: #1c1f22;
+  background: linear-gradient(180deg, #ffc94d, #ff9a1f);
+  color: #10161f;
   font-weight: 600;
   cursor: pointer;
 }
@@ -171,5 +180,11 @@ canvas { display: block; }
   border-collapse: collapse;
   font-size: 14px;
 }
-#controls td { padding: 3px 10px; text-align: left; }
-#controls td:first-child { color: var(--accent); text-align: right; font-weight: 600; }
+#controls td, #controls th { padding: 3px 10px; text-align: left; }
+#controls th { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+#controls td:first-child { color: var(--muted); text-align: right; }
+#controls .rh, #controls.lefty .lh { color: var(--accent); font-weight: 600; }
+#controls.lefty .rh, #controls .lh { color: rgba(255, 255, 255, 0.45); font-weight: 400; }
+
+#lefty-row { display: block; margin-top: 18px; font-size: 14px; cursor: pointer; }
+#lefty-row input { accent-color: var(--accent); vertical-align: -2px; margin-right: 6px; }

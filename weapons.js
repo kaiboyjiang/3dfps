@@ -1,4 +1,4 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import * as THREE from 'three';
 
 // Viewmodel convention: metres, real-world proportions, origin at the trigger,
 // -Z points out of the muzzle, +Y up. Profiles are side silhouettes given as

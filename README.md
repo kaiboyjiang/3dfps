@@ -7,17 +7,18 @@ Play: https://kaiboyjiang.github.io/3dfps/
 
 ## Controls
 
-| Key | Action |
-| --- | --- |
-| WASD / arrows | Move |
-| Mouse | Aim |
-| Left click | Shoot (hold for automatic weapons) |
-| Right click | Aim down sights / scope |
-| 1-5 / mouse wheel | Switch weapon |
-| Space | Jump (crates can be climbed) |
-| Shift | Sprint |
-| R | Reload |
-| Esc | Pause |
+Both layouts are always active. Tick **Left-handed mouse** on the start screen to swap the mouse buttons (saved in the browser).
+
+| Action | Mouse in right hand | Mouse in left hand |
+| --- | --- | --- |
+| Move | WASD | IJKL / arrows / numpad 8-4-5-6 |
+| Shoot (hold for automatic weapons) | Left click | Right click (with swap enabled) |
+| Aim down sights / scope | Right click | Left click (with swap enabled) |
+| Switch weapon | 1-5 / mouse wheel | 6-0 / mouse wheel / Y, O |
+| Jump (crates can be climbed) | Space | Space / Right Ctrl / numpad 0 |
+| Sprint | Shift | Right Shift / H |
+| Reload | R / middle click | U / Enter / middle click |
+| Pause | Esc | Esc / P |
 
 Weapons are procedurally modelled after real firearms, each with its own damage, fire rate, recoil, magazine and reload:
 
@@ -30,6 +31,10 @@ Weapons are procedurally modelled after real firearms, each with its own damage,
 | 5 | M24 SWS | 7.62x51mm | Bolt-action sniper with 10x scope |
 
 Headshots deal extra damage. Enemies path around cover, drop health/ammo pickups, and each wave brings more of them.
+
+## Graphics
+
+Scenes use physically based materials with CC0 texture sets from [Poly Haven](https://polyhaven.com) (`assets/textures`), image-based lighting from a sky dome, soft sun shadows, ACES tone mapping, MSAA, bloom and bullet-hole decals.
 
 ## Run locally
 

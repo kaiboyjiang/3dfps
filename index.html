@@ -39,20 +39,29 @@
       <h1 id="title">3D FPS</h1>
       <p id="subtitle">Survive the waves.</p>
       <button id="play">Click to play</button>
+      <label id="lefty-row"><input type="checkbox" id="lefty"> Left-handed mouse (swaps mouse buttons)</label>
       <table id="controls">
-        <tr><td>WASD</td><td>Move</td></tr>
-        <tr><td>Mouse</td><td>Aim</td></tr>
-        <tr><td>Left click</td><td>Shoot</td></tr>
-        <tr><td>Right click</td><td>Aim down sights / scope</td></tr>
-        <tr><td>1-5 / Wheel</td><td>Switch weapon</td></tr>
-        <tr><td>Space</td><td>Jump</td></tr>
-        <tr><td>Shift</td><td>Sprint</td></tr>
-        <tr><td>R</td><td>Reload</td></tr>
-        <tr><td>Esc</td><td>Pause</td></tr>
+        <tr><th></th><th class="rh">Mouse in right hand</th><th class="lh">Mouse in left hand</th></tr>
+        <tr><td>Move</td><td class="rh">WASD</td><td class="lh">IJKL / Arrows / Numpad 8456</td></tr>
+        <tr><td>Shoot</td><td class="rh">Left click</td><td class="lh">Right click</td></tr>
+        <tr><td>Aim / scope</td><td class="rh">Right click</td><td class="lh">Left click</td></tr>
+        <tr><td>Switch weapon</td><td class="rh">1-5 / Wheel</td><td class="lh">6-0 / Wheel / Y, O</td></tr>
+        <tr><td>Jump</td><td class="rh">Space</td><td class="lh">Space / Right Ctrl / Numpad 0</td></tr>
+        <tr><td>Sprint</td><td class="rh">Shift</td><td class="lh">Right Shift / H</td></tr>
+        <tr><td>Reload</td><td class="rh">R / Middle click</td><td class="lh">U / Enter / Middle click</td></tr>
+        <tr><td>Pause</td><td class="rh">Esc</td><td class="lh">Esc / P</td></tr>
       </table>
     </div>
   </div>
 
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+      }
+    }
+  </script>
   <script type="module" src="game.js"></script>
 </body>
 </html>
