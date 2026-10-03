@@ -21,18 +21,18 @@ You win by holding all three sections or emptying the enemy's tickets, and lose 
 
 ## Controls
 
-Both layouts are always active. Tick **Left-handed mouse** on the start screen to swap the mouse buttons (saved in the browser).
+All key layouts are always active, so you can play with the mouse in either hand. Mouse buttons are the same for everyone: left click shoots, right click aims.
 
-| Action | Mouse in right hand | Mouse in left hand |
-| --- | --- | --- |
-| Move | WASD | IJKL / arrows / numpad 8-4-5-6 |
-| Shoot (hold for automatic weapons) | Left click | Right click (with swap enabled) |
-| Aim down sights / scope | Right click | Left click (with swap enabled) |
-| Switch weapon | 1-5 / mouse wheel | 6-0 / mouse wheel / Y, O |
-| Jump (crates can be climbed) | Space | Space / Right Ctrl / numpad 0 |
-| Sprint | Shift | Right Shift / H |
-| Reload | R / middle click | U / Enter / middle click |
-| Pause | Esc | Esc / P |
+| Action | Controls |
+| --- | --- |
+| Move | WASD / IJKL / arrows / numpad 8-4-5-6 |
+| Shoot (hold for automatic weapons) | Left click |
+| Aim down sights / scope | Right click |
+| Switch weapon | 1-5 / 6-0 / mouse wheel / Y, O |
+| Jump | Space / Right Ctrl / numpad 0 |
+| Sprint | Shift / H |
+| Reload | R / U / Enter / middle click |
+| Pause | Esc / P |
 
 Five procedurally modelled energy weapons, each with its own damage, fire rate, recoil, cell capacity and recharge:
 

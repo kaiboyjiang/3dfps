@@ -1856,7 +1856,6 @@ const WEAPON_KEYS = [
 ];
 const held = (action) => BINDINGS[action].some((code) => keys[code]);
 const bound = (action, code) => BINDINGS[action].includes(code);
-const settings = { lefty: localStorage.getItem('fps-lefty') === '1' };
 let mouseDown = false;
 let aimDown = false;
 let triggerQueued = false;
@@ -2122,7 +2121,7 @@ function updateHud() {
   hud.reserve.textContent = w.reserve;
   if (player.reloading > 0) hud.reloadHint.textContent = 'Reloading...';
   else if (w.mag === 0 && w.reserve === 0) hud.reloadHint.textContent = 'Out of ammo';
-  else if (w.mag <= Math.ceil(w.def.magSize * 0.2)) hud.reloadHint.textContent = settings.lefty ? 'Press U to reload' : 'Press R to reload';
+  else if (w.mag <= Math.ceil(w.def.magSize * 0.2)) hud.reloadHint.textContent = 'Press R to reload';
   else hud.reloadHint.textContent = '';
   [...hud.slots.children].forEach((el, i) => {
     el.classList.toggle('active', i === player.switchTo);
@@ -2165,20 +2164,6 @@ function requestLock() {
 
 hud.play.addEventListener('click', requestLock);
 
-const leftyBox = document.getElementById('lefty');
-const controlsTable = document.getElementById('controls');
-function applyHandedness() {
-  leftyBox.checked = settings.lefty;
-  controlsTable.classList.toggle('lefty', settings.lefty);
-}
-leftyBox.addEventListener('change', () => {
-  settings.lefty = leftyBox.checked;
-  localStorage.setItem('fps-lefty', settings.lefty ? '1' : '0');
-  applyHandedness();
-  updateHud();
-});
-applyHandedness();
-
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement === renderer.domElement) {
     game.state = 'playing';
@@ -2206,8 +2191,9 @@ document.addEventListener('mousemove', (e) => {
   player.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, player.pitch));
 });
 
-const fireButton = () => (settings.lefty ? 2 : 0);
-const aimButton = () => (settings.lefty ? 0 : 2);
+// Same mouse buttons for everyone: left click fires, right click aims.
+const fireButton = () => 0;
+const aimButton = () => 2;
 
 document.addEventListener('mousedown', (e) => {
   if (game.state !== 'playing') return;

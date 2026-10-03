@@ -283,8 +283,4 @@ canvas { display: block; }
 #controls td, #controls th { padding: 3px 10px; text-align: left; }
 #controls th { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
 #controls td:first-child { color: var(--muted); text-align: right; }
-#controls .rh, #controls.lefty .lh { color: var(--accent); font-weight: 600; }
-#controls.lefty .rh, #controls .lh { color: rgba(255, 255, 255, 0.45); font-weight: 400; }
 
-#lefty-row { display: block; margin-top: 18px; font-size: 14px; cursor: pointer; }
-#lefty-row input { accent-color: var(--accent); vertical-align: -2px; margin-right: 6px; }
